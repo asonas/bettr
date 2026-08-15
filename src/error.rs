@@ -16,6 +16,8 @@ pub enum AppError {
     Conflict(String),
     DatabaseBusy(String),
     Internal(String),
+    DatabaseAlreadyInitialized,
+    DatabaseNotInitialized,
 }
 
 impl AppError {
@@ -26,6 +28,20 @@ impl AppError {
             Self::Conflict(_) => ExitCode::Conflict,
             Self::DatabaseBusy(_) => ExitCode::DatabaseBusy,
             Self::Internal(_) => ExitCode::Internal,
+            Self::DatabaseAlreadyInitialized => ExitCode::InvalidInput,
+            Self::DatabaseNotInitialized => ExitCode::NotFound,
+        }
+    }
+
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidInput(_) => "invalid_input",
+            Self::NotFound(_) => "not_found",
+            Self::Conflict(_) => "conflict",
+            Self::DatabaseBusy(_) => "database_busy",
+            Self::Internal(_) => "internal_error",
+            Self::DatabaseAlreadyInitialized => "database_already_initialized",
+            Self::DatabaseNotInitialized => "database_not_initialized",
         }
     }
 }
@@ -38,6 +54,10 @@ impl std::fmt::Display for AppError {
             | Self::Conflict(message)
             | Self::DatabaseBusy(message)
             | Self::Internal(message) => formatter.write_str(message),
+            Self::DatabaseAlreadyInitialized => {
+                formatter.write_str("database is already initialized")
+            }
+            Self::DatabaseNotInitialized => formatter.write_str("database is not initialized"),
         }
     }
 }
