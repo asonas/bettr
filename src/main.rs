@@ -6,7 +6,30 @@ mod output;
 mod store;
 
 fn main() -> std::process::ExitCode {
-    let cli = <crate::cli::Cli as clap::Parser>::parse();
+    let arguments = std::env::args_os().collect::<Vec<_>>();
+    let output_mode = crate::output::OutputMode::from_arguments(&arguments);
+    let cli = match <crate::cli::Cli as clap::Parser>::try_parse_from(arguments) {
+        Ok(cli) => cli,
+        Err(error)
+            if matches!(
+                error.kind(),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+            ) =>
+        {
+            let exit_code = error.exit_code();
+            if error.print().is_err() {
+                return std::process::ExitCode::from(crate::error::ExitCode::Internal as u8);
+            }
+            return std::process::ExitCode::from(exit_code as u8);
+        }
+        Err(error) => {
+            crate::output::write_error(
+                output_mode,
+                &crate::error::AppError::InvalidInput(error.to_string()),
+            );
+            return std::process::ExitCode::from(crate::error::ExitCode::InvalidInput as u8);
+        }
+    };
     let output_mode = crate::output::OutputMode::from(&cli);
 
     match crate::run(cli, output_mode) {

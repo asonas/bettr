@@ -4,6 +4,19 @@ pub enum OutputMode {
     Json,
 }
 
+impl OutputMode {
+    pub fn from_arguments(arguments: &[std::ffi::OsString]) -> Self {
+        if arguments
+            .iter()
+            .any(|argument| argument.as_os_str() == std::ffi::OsStr::new("--json"))
+        {
+            Self::Json
+        } else {
+            Self::Human
+        }
+    }
+}
+
 impl From<&crate::cli::Cli> for OutputMode {
     fn from(cli: &crate::cli::Cli) -> Self {
         if cli.json { Self::Json } else { Self::Human }
@@ -34,7 +47,7 @@ pub fn write_success(data: impl serde::Serialize) {
 }
 
 pub fn write_issue_human(project: &str, issue: &crate::domain::Issue) {
-    println!("{project}#{}", issue.number);
+    println!("{}#{}", escape_terminal_controls(project), issue.number);
     println!("state: {}", issue.state.as_str());
     println!("title: {}", escape_terminal_controls(&issue.title));
     println!("revision: {}", issue.revision);

@@ -96,6 +96,27 @@ fn issue_create_allocates_numbers_per_project() {
         let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(response["data"]["number"], expected_number);
     }
+
+    app.command()
+        .args(["project", "create", "other"])
+        .assert()
+        .success();
+    let output = app
+        .command()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "other",
+            "--title",
+            "Start fresh",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response["data"]["number"], 1);
 }
 
 #[test]
@@ -258,6 +279,34 @@ fn issue_create_validates_titles() {
 }
 
 #[test]
+fn issue_create_parse_errors_in_json_mode_use_the_error_envelope() {
+    let app = crate::support::TestApp::new();
+
+    for arguments in [
+        vec!["issue", "create", "--project", "bettr", "--json"],
+        vec![
+            "issue",
+            "create",
+            "--project",
+            "bettr",
+            "--title",
+            "Build local core",
+            "--priority",
+            "highest",
+            "--json",
+        ],
+    ] {
+        let output = app.command().args(arguments).output().unwrap();
+
+        assert_eq!(output.status.code(), Some(2));
+        let response: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(response["schema_version"], 1);
+        assert_eq!(response["error"]["code"], "invalid_input");
+        assert!(!response["error"]["message"].as_str().unwrap().is_empty());
+    }
+}
+
+#[test]
 fn issue_show_preserves_terminal_escape_sequences_as_text() {
     let app = crate::support::TestApp::new();
     app.command().arg("init").assert().success();
@@ -290,4 +339,36 @@ fn issue_show_preserves_terminal_escape_sequences_as_text() {
     assert!(human_output.contains("bettr#1"));
     assert!(human_output.contains("\\u{1b}[31mnot red"));
     assert!(human_output.contains("\\u{1b}[0mstill text"));
+}
+
+#[test]
+fn issue_show_escapes_terminal_controls_in_the_project_name() {
+    let app = crate::support::TestApp::new();
+    let project = "\u{1b}[31mbettr";
+    app.command().arg("init").assert().success();
+    app.command()
+        .args(["project", "create", project])
+        .assert()
+        .success();
+    app.command()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            project,
+            "--title",
+            "Build local core",
+        ])
+        .assert()
+        .success();
+
+    let output = app
+        .command()
+        .args(["issue", "show", "1", "--project", project])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let human_output = String::from_utf8(output.stdout).unwrap();
+    assert!(human_output.contains("\\u{1b}[31mbettr#1"));
 }
