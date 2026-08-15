@@ -50,10 +50,7 @@ fn run(
                         crate::output::OutputMode::Human => {
                             println!("{} {}", project.id, project.name)
                         }
-                        crate::output::OutputMode::Json => println!(
-                            "{}",
-                            serde_json::json!({ "schema_version": 1, "data": project })
-                        ),
+                        crate::output::OutputMode::Json => crate::output::write_success(project),
                     }
                 }
                 crate::cli::ProjectSubcommand::List => {
@@ -64,16 +61,59 @@ fn run(
                                 println!("{} {}", project.id, project.name);
                             }
                         }
-                        crate::output::OutputMode::Json => println!(
-                            "{}",
-                            serde_json::json!({ "schema_version": 1, "data": projects })
-                        ),
+                        crate::output::OutputMode::Json => crate::output::write_success(projects),
                     }
                 }
             }
             Ok(())
         }
-        crate::cli::Command::Issue(_) | crate::cli::Command::Status(_) => {
+        crate::cli::Command::Issue(issue_command) => {
+            let database = crate::store::Database::open(database_path)?;
+            let mut app = crate::app::App::new(database);
+
+            match issue_command.command {
+                crate::cli::IssueSubcommand::Create(create_command) => {
+                    let project = cli.project.as_deref().ok_or_else(|| {
+                        crate::error::AppError::InvalidInput("--project is required".to_owned())
+                    })?;
+                    let context = crate::domain::ExecutionContext::resolve()?;
+                    let issue = app.create_issue(
+                        project,
+                        crate::domain::NewIssue {
+                            title: create_command.title,
+                            body: create_command.body,
+                            priority: create_command.priority,
+                        },
+                        &context,
+                    )?;
+                    match output_mode {
+                        crate::output::OutputMode::Human => {
+                            println!("{project}#{} {}", issue.number, issue.title)
+                        }
+                        crate::output::OutputMode::Json => crate::output::write_success(issue),
+                    }
+                }
+                crate::cli::IssueSubcommand::Show(show_command) => {
+                    let project = cli.project.as_deref().ok_or_else(|| {
+                        crate::error::AppError::InvalidInput("--project is required".to_owned())
+                    })?;
+                    let issue = app.show_issue(project, show_command.number)?;
+                    match output_mode {
+                        crate::output::OutputMode::Human => {
+                            crate::output::write_issue_human(project, &issue)
+                        }
+                        crate::output::OutputMode::Json => crate::output::write_success(issue),
+                    }
+                }
+                crate::cli::IssueSubcommand::List => {
+                    return Err(crate::error::AppError::Internal(
+                        "command is not implemented".to_owned(),
+                    ));
+                }
+            }
+            Ok(())
+        }
+        crate::cli::Command::Status(_) => {
             let _database = crate::store::Database::open(database_path)?;
             Err(crate::error::AppError::Internal(
                 "command is not implemented".to_owned(),

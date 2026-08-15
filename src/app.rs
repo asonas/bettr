@@ -56,6 +56,71 @@ impl App {
         }
     }
 
+    pub fn create_issue(
+        &mut self,
+        project: &str,
+        input: crate::domain::NewIssue,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        match input
+            .validate()
+            .and_then(|()| self.database.create_issue(project, &input, context))
+        {
+            Ok(issue) => Ok(issue),
+            Err(error) => {
+                if let Err(audit_error) =
+                    self.database
+                        .record_failed_operation("issue_create", context, &error)
+                {
+                    return Err(Self::failure_audit_error(
+                        "issue_create",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn show_issue(
+        &mut self,
+        project: &str,
+        number: i64,
+    ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        if number < 1 {
+            return Err(crate::error::AppError::InvalidInput(
+                "issue number must be positive".to_owned(),
+            ));
+        }
+
+        let context = crate::domain::ExecutionContext::resolve()?;
+        match self.database.show_issue(project, number) {
+            Ok(issue) => {
+                let issue_id = issue.id.to_string();
+                self.database.record_successful_operation(
+                    "issue_show",
+                    &context,
+                    Some(("issue", &issue_id)),
+                )?;
+                Ok(issue)
+            }
+            Err(error) => {
+                if let Err(audit_error) =
+                    self.database
+                        .record_failed_operation("issue_show", &context, &error)
+                {
+                    return Err(Self::failure_audit_error(
+                        "issue_show",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
     fn failure_audit_error(
         operation: &str,
         original_error: &crate::error::AppError,

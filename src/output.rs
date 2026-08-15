@@ -25,3 +25,42 @@ pub fn write_error(mode: OutputMode, error: &crate::error::AppError) {
         ),
     }
 }
+
+pub fn write_success(data: impl serde::Serialize) {
+    println!(
+        "{}",
+        serde_json::json!({ "schema_version": 1, "data": data })
+    );
+}
+
+pub fn write_issue_human(project: &str, issue: &crate::domain::Issue) {
+    println!("{project}#{}", issue.number);
+    println!("state: {}", issue.state.as_str());
+    println!("title: {}", escape_terminal_controls(&issue.title));
+    println!("revision: {}", issue.revision);
+    println!(
+        "priority: {}",
+        issue
+            .priority
+            .map_or("none", crate::domain::Priority::as_str)
+    );
+    println!(
+        "assignee: {}",
+        issue
+            .assignee_name
+            .as_deref()
+            .map_or_else(|| "none".to_owned(), escape_terminal_controls)
+    );
+    println!("body:");
+    println!(
+        "{}",
+        issue
+            .body
+            .as_deref()
+            .map_or_else(|| "none".to_owned(), escape_terminal_controls)
+    );
+}
+
+fn escape_terminal_controls(value: &str) -> String {
+    value.chars().flat_map(char::escape_default).collect()
+}

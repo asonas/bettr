@@ -50,7 +50,26 @@ pub struct IssueCommand {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum IssueSubcommand {
+    Create(IssueCreateCommand),
+    Show(IssueShowCommand),
     List,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueCreateCommand {
+    #[arg(long)]
+    pub title: String,
+
+    #[arg(long)]
+    pub body: Option<String>,
+
+    #[arg(long, value_enum)]
+    pub priority: Option<crate::domain::Priority>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueShowCommand {
+    pub number: i64,
 }
 
 #[derive(clap::Args, Debug)]

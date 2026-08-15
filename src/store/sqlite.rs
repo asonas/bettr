@@ -133,6 +133,50 @@ impl Database {
         Ok(projects)
     }
 
+    pub fn create_issue(
+        &mut self,
+        project_name: &str,
+        input: &crate::domain::NewIssue,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        for attempt in 0..3 {
+            match self.create_issue_once(project_name, input, context) {
+                Err(crate::error::AppError::DatabaseBusy(_)) if attempt < 2 => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                result => return result,
+            }
+        }
+        unreachable!("the retry loop always returns")
+    }
+
+    pub fn show_issue(
+        &self,
+        project_name: &str,
+        number: i64,
+    ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        let project_id = self.project_id(project_name)?;
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT id, project_id, number, title, body, state, priority, assignee_kind,
+                        assignee_name, revision, created_at, updated_at
+                 FROM issues WHERE project_id = ?1 AND number = ?2",
+            )
+            .map_err(Self::database_error)?;
+        statement
+            .query_row(
+                rusqlite::params![project_id.to_string(), number],
+                Self::issue_from_row,
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    crate::error::AppError::NotFound("issue not found".to_owned())
+                }
+                error => Self::database_error(error),
+            })
+    }
+
     pub fn record_successful_operation(
         &mut self,
         operation: &str,
@@ -199,6 +243,161 @@ impl Database {
             )
             .map_err(Self::database_error)?;
         Ok(())
+    }
+
+    fn create_issue_once(
+        &mut self,
+        project_name: &str,
+        input: &crate::domain::NewIssue,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(Self::database_error)?;
+        let project_id = Self::project_id_in_transaction(&transaction, project_name)?;
+        let number = transaction
+            .query_row(
+                "SELECT COALESCE(MAX(number), 0) + 1 FROM issues WHERE project_id = ?1",
+                [project_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(Self::database_error)?;
+        let now = chrono::Utc::now();
+        let issue = crate::domain::Issue {
+            id: uuid::Uuid::new_v4(),
+            project_id,
+            number,
+            title: input.title.clone(),
+            body: input.body.clone(),
+            state: crate::domain::IssueState::Todo,
+            priority: input.priority,
+            assignee_kind: None,
+            assignee_name: None,
+            revision: 1,
+            created_at: now,
+            updated_at: now,
+        };
+        transaction
+            .execute(
+                "INSERT INTO issues (
+                    id, project_id, number, title, body, state, priority, assignee_kind,
+                    assignee_name, revision, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                rusqlite::params![
+                    issue.id.to_string(),
+                    issue.project_id.to_string(),
+                    issue.number,
+                    issue.title,
+                    issue.body,
+                    issue.state.as_str(),
+                    issue.priority.map(crate::domain::Priority::as_str),
+                    issue.assignee_kind,
+                    issue.assignee_name,
+                    issue.revision,
+                    issue.created_at.to_rfc3339(),
+                    issue.updated_at.to_rfc3339(),
+                ],
+            )
+            .map_err(Self::database_error)?;
+        transaction
+            .execute(
+                "INSERT INTO domain_events (id, sequence, project_id, issue_id, event_type, metadata_json, created_at)
+                 VALUES (?1, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM domain_events), ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    issue.project_id.to_string(),
+                    issue.id.to_string(),
+                    "issue_created",
+                    serde_json::json!({ "number": issue.number, "revision": issue.revision }).to_string(),
+                    issue.created_at.to_rfc3339(),
+                ],
+            )
+            .map_err(Self::database_error)?;
+        let issue_id = issue.id.to_string();
+        Self::insert_audit_event(
+            &transaction,
+            "issue_create",
+            true,
+            context,
+            Some(("issue", &issue_id)),
+            "{}",
+        )?;
+        transaction.commit().map_err(Self::database_error)?;
+        Ok(issue)
+    }
+
+    fn project_id(&self, project_name: &str) -> Result<uuid::Uuid, crate::error::AppError> {
+        let id = self
+            .connection
+            .query_row(
+                "SELECT id FROM projects WHERE name = ?1",
+                [project_name],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    crate::error::AppError::NotFound("project not found".to_owned())
+                }
+                error => Self::database_error(error),
+            })?;
+        uuid::Uuid::parse_str(&id)
+            .map_err(|error| crate::error::AppError::Internal(error.to_string()))
+    }
+
+    fn project_id_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        project_name: &str,
+    ) -> Result<uuid::Uuid, crate::error::AppError> {
+        let id = transaction
+            .query_row(
+                "SELECT id FROM projects WHERE name = ?1",
+                [project_name],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    crate::error::AppError::NotFound("project not found".to_owned())
+                }
+                error => Self::database_error(error),
+            })?;
+        uuid::Uuid::parse_str(&id)
+            .map_err(|error| crate::error::AppError::Internal(error.to_string()))
+    }
+
+    fn issue_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<crate::domain::Issue> {
+        let id: String = row.get(0)?;
+        let project_id: String = row.get(1)?;
+        let state: String = row.get(5)?;
+        let priority: Option<String> = row.get(6)?;
+        let created_at: String = row.get(10)?;
+        let updated_at: String = row.get(11)?;
+        let parse_error = |error: Box<dyn std::error::Error + Send + Sync>| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, error)
+        };
+        Ok(crate::domain::Issue {
+            id: uuid::Uuid::parse_str(&id).map_err(|error| parse_error(Box::new(error)))?,
+            project_id: uuid::Uuid::parse_str(&project_id)
+                .map_err(|error| parse_error(Box::new(error)))?,
+            number: row.get(2)?,
+            title: row.get(3)?,
+            body: row.get(4)?,
+            state: crate::domain::IssueState::parse(&state)
+                .map_err(|error| parse_error(Box::new(error)))?,
+            priority: priority
+                .map(|value| crate::domain::Priority::parse(&value))
+                .transpose()
+                .map_err(|error| parse_error(Box::new(error)))?,
+            assignee_kind: row.get(7)?,
+            assignee_name: row.get(8)?,
+            revision: row.get(9)?,
+            created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
+                .map_err(|error| parse_error(Box::new(error)))?
+                .with_timezone(&chrono::Utc),
+            updated_at: chrono::DateTime::parse_from_rfc3339(&updated_at)
+                .map_err(|error| parse_error(Box::new(error)))?
+                .with_timezone(&chrono::Utc),
+        })
     }
 
     fn create_parent_directory(path: &std::path::Path) -> Result<(), crate::error::AppError> {
