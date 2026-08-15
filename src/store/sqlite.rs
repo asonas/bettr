@@ -2,6 +2,8 @@ pub struct Database {
     connection: rusqlite::Connection,
 }
 
+const BETTR_APPLICATION_ID: i64 = 0x4254_5452;
+
 struct AuditInsert<'a> {
     operation: &'a str,
     success: bool,
@@ -1249,24 +1251,11 @@ impl Database {
         let version = connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .map_err(Self::database_error)?;
-        let table_count = connection
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_schema
-                 WHERE type = 'table'
-                   AND name IN ('projects', 'issues', 'comments', 'domain_events', 'audit_events')",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(Self::database_error)?;
-        let audit_column_count = connection
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('audit_events')",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
+        let application_id = connection
+            .pragma_query_value(None, "application_id", |row| row.get::<_, i64>(0))
             .map_err(Self::database_error)?;
 
-        Ok(version == 1 && table_count == 5 && audit_column_count == 16)
+        Ok(version == 1 && application_id == BETTR_APPLICATION_ID)
     }
 
     fn initialize_schema(

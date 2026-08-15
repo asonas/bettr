@@ -74,4 +74,5 @@ CREATE INDEX audit_events_project_id ON audit_events(project_id);
 CREATE INDEX audit_events_operation ON audit_events(operation);
 CREATE INDEX audit_events_finished_at ON audit_events(finished_at);
 
+PRAGMA application_id = 1112822866;
 PRAGMA user_version = 1;
