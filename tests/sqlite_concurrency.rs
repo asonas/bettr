@@ -366,39 +366,14 @@ fn a_writer_reports_database_busy_when_the_lock_outlives_the_timeout() {
 }
 
 #[test]
-fn wal_read_and_read_cli_open_continue_while_an_immediate_writer_is_open() {
+fn production_database_reads_continue_while_an_immediate_writer_is_open() {
     let app = initialized_project();
     let writer = LockedWriter::start(&app.database);
 
-    // Successful reads append audit events and therefore need the writer lock.
-    // Conflicting list arguments stop after Database::open, isolating the real
-    // CLI connection policy while the query below verifies the WAL read itself.
-    let output = bettr_command(&app.database)
-        .args([
-            "issue",
-            "list",
-            "--all-projects",
-            "--project",
-            "bettr",
-            "--json",
-        ])
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(2));
-    assert_eq!(
-        output_json(&output.stderr)["error"]["code"],
-        "invalid_input"
-    );
-
-    let connection = rusqlite::Connection::open(&app.database).unwrap();
-    assert_eq!(
-        connection
-            .query_row("SELECT COUNT(*) FROM projects", [], |row| {
-                row.get::<_, i64>(0)
-            })
-            .unwrap(),
-        1
-    );
+    let database = crate::store::Database::open(&app.database).unwrap();
+    let projects = database.list_projects().unwrap();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0].name, "bettr");
 
     writer.release();
 }
