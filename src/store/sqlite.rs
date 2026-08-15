@@ -177,6 +177,91 @@ impl Database {
             })
     }
 
+    pub fn list_issues(
+        &self,
+        filter: &crate::domain::IssueFilter,
+    ) -> Result<Vec<crate::domain::IssueListItem>, crate::error::AppError> {
+        for project in &filter.projects {
+            self.project_id(project)?;
+        }
+
+        let mut sql = String::from(
+            "SELECT p.name, i.id, i.project_id, i.number, i.title, i.body, i.state,
+                    i.priority, i.assignee_kind, i.assignee_name, i.revision,
+                    i.created_at, i.updated_at
+             FROM issues i
+             JOIN projects p ON p.id = i.project_id
+             WHERE 1 = 1",
+        );
+        let mut parameters = Vec::<rusqlite::types::Value>::new();
+
+        Self::append_text_filter(&mut sql, &mut parameters, "p.name", &filter.projects);
+        if filter.states.is_empty() {
+            if !filter.include_done {
+                sql.push_str(" AND i.state NOT IN ('done', 'cancelled')");
+            }
+        } else {
+            let states = filter
+                .states
+                .iter()
+                .map(|state| state.as_str().to_owned())
+                .collect::<Vec<_>>();
+            Self::append_text_filter(&mut sql, &mut parameters, "i.state", &states);
+        }
+        if !filter.priorities.is_empty() {
+            let priorities = filter
+                .priorities
+                .iter()
+                .map(|priority| priority.as_str().to_owned())
+                .collect::<Vec<_>>();
+            Self::append_text_filter(&mut sql, &mut parameters, "i.priority", &priorities);
+        }
+        if let Some(assignee) = &filter.assignee {
+            sql.push_str(" AND i.assignee_name = ?");
+            parameters.push(assignee.clone().into());
+        }
+        if let Some(updated_after) = filter.updated_after {
+            sql.push_str(" AND i.updated_at > ?");
+            parameters.push(updated_after.to_rfc3339().into());
+        }
+        if let Some(query) = &filter.query {
+            let pattern = format!("%{}%", Self::escape_like(query));
+            sql.push_str(
+                " AND (i.title LIKE ? ESCAPE '\\' OR COALESCE(i.body, '') LIKE ? ESCAPE '\\')",
+            );
+            parameters.push(pattern.clone().into());
+            parameters.push(pattern.into());
+        }
+        sql.push_str(
+            " ORDER BY
+                CASE WHEN 0 THEN 0 ELSE 1 END ASC,
+                CASE i.state WHEN 'blocked' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END ASC,
+                CASE i.priority
+                    WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2
+                    WHEN 'low' THEN 3 ELSE 4
+                END ASC,
+                i.created_at ASC,
+                p.name ASC,
+                i.number ASC",
+        );
+
+        let mut statement = self
+            .connection
+            .prepare(&sql)
+            .map_err(Self::database_error)?;
+        let mut rows = statement
+            .query(rusqlite::params_from_iter(parameters.iter()))
+            .map_err(Self::database_error)?;
+        let mut issues = Vec::new();
+        while let Some(row) = rows.next().map_err(Self::database_error)? {
+            issues.push(crate::domain::IssueListItem {
+                project: row.get(0).map_err(Self::database_error)?,
+                issue: Self::issue_from_row_at(row, 1).map_err(Self::database_error)?,
+            });
+        }
+        Ok(issues)
+    }
+
     pub fn record_successful_operation(
         &mut self,
         operation: &str,
@@ -366,12 +451,19 @@ impl Database {
     }
 
     fn issue_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<crate::domain::Issue> {
-        let id: String = row.get(0)?;
-        let project_id: String = row.get(1)?;
-        let state: String = row.get(5)?;
-        let priority: Option<String> = row.get(6)?;
-        let created_at: String = row.get(10)?;
-        let updated_at: String = row.get(11)?;
+        Self::issue_from_row_at(row, 0)
+    }
+
+    fn issue_from_row_at(
+        row: &rusqlite::Row<'_>,
+        offset: usize,
+    ) -> rusqlite::Result<crate::domain::Issue> {
+        let id: String = row.get(offset)?;
+        let project_id: String = row.get(offset + 1)?;
+        let state: String = row.get(offset + 5)?;
+        let priority: Option<String> = row.get(offset + 6)?;
+        let created_at: String = row.get(offset + 10)?;
+        let updated_at: String = row.get(offset + 11)?;
         let parse_error = |error: Box<dyn std::error::Error + Send + Sync>| {
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, error)
         };
@@ -379,18 +471,18 @@ impl Database {
             id: uuid::Uuid::parse_str(&id).map_err(|error| parse_error(Box::new(error)))?,
             project_id: uuid::Uuid::parse_str(&project_id)
                 .map_err(|error| parse_error(Box::new(error)))?,
-            number: row.get(2)?,
-            title: row.get(3)?,
-            body: row.get(4)?,
+            number: row.get(offset + 2)?,
+            title: row.get(offset + 3)?,
+            body: row.get(offset + 4)?,
             state: crate::domain::IssueState::parse(&state)
                 .map_err(|error| parse_error(Box::new(error)))?,
             priority: priority
                 .map(|value| crate::domain::Priority::parse(&value))
                 .transpose()
                 .map_err(|error| parse_error(Box::new(error)))?,
-            assignee_kind: row.get(7)?,
-            assignee_name: row.get(8)?,
-            revision: row.get(9)?,
+            assignee_kind: row.get(offset + 7)?,
+            assignee_name: row.get(offset + 8)?,
+            revision: row.get(offset + 9)?,
             created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
                 .map_err(|error| parse_error(Box::new(error)))?
                 .with_timezone(&chrono::Utc),
@@ -398,6 +490,30 @@ impl Database {
                 .map_err(|error| parse_error(Box::new(error)))?
                 .with_timezone(&chrono::Utc),
         })
+    }
+
+    fn append_text_filter(
+        sql: &mut String,
+        parameters: &mut Vec<rusqlite::types::Value>,
+        column: &str,
+        values: &[String],
+    ) {
+        if values.is_empty() {
+            return;
+        }
+        sql.push_str(" AND ");
+        sql.push_str(column);
+        sql.push_str(" IN (");
+        sql.push_str(&vec!["?"; values.len()].join(", "));
+        sql.push(')');
+        parameters.extend(values.iter().cloned().map(rusqlite::types::Value::from));
+    }
+
+    fn escape_like(value: &str) -> String {
+        value
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
     }
 
     fn create_parent_directory(path: &std::path::Path) -> Result<(), crate::error::AppError> {

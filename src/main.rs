@@ -128,19 +128,50 @@ fn run(
                         crate::output::OutputMode::Json => crate::output::write_success(issue),
                     }
                 }
-                crate::cli::IssueSubcommand::List => {
-                    return Err(crate::error::AppError::Internal(
-                        "command is not implemented".to_owned(),
-                    ));
+                crate::cli::IssueSubcommand::List(list_command) => {
+                    if list_command.all_projects && cli.project.is_some() {
+                        return Err(crate::error::AppError::InvalidInput(
+                            "--all-projects cannot be used with --project".to_owned(),
+                        ));
+                    }
+                    let projects = if list_command.all_projects {
+                        Vec::new()
+                    } else {
+                        vec![cli.project.ok_or_else(|| {
+                            crate::error::AppError::InvalidInput(
+                                "--project is required unless --all-projects is used".to_owned(),
+                            )
+                        })?]
+                    };
+                    let filter = crate::domain::IssueFilter {
+                        projects,
+                        states: list_command.state,
+                        priorities: list_command.priority,
+                        assignee: list_command.assignee,
+                        updated_after: list_command.updated_after,
+                        query: list_command.query,
+                        include_done: list_command.include_completed,
+                    };
+                    let issues = app.list_issues(&filter)?;
+                    match output_mode {
+                        crate::output::OutputMode::Human => {
+                            crate::output::write_issue_list_human(&issues)
+                        }
+                        crate::output::OutputMode::Json => crate::output::write_success(issues),
+                    }
                 }
             }
             Ok(())
         }
         crate::cli::Command::Status(_) => {
-            let _database = crate::store::Database::open(database_path)?;
-            Err(crate::error::AppError::Internal(
-                "command is not implemented".to_owned(),
-            ))
+            let database = crate::store::Database::open(database_path)?;
+            let mut app = crate::app::App::new(database);
+            let status = app.status()?;
+            match output_mode {
+                crate::output::OutputMode::Human => crate::output::write_status_human(&status),
+                crate::output::OutputMode::Json => crate::output::write_success(status),
+            }
+            Ok(())
         }
     }
 }

@@ -121,6 +121,80 @@ impl App {
         }
     }
 
+    pub fn list_issues(
+        &mut self,
+        filter: &crate::domain::IssueFilter,
+    ) -> Result<Vec<crate::domain::IssueListItem>, crate::error::AppError> {
+        let context = crate::domain::ExecutionContext::resolve()?;
+        match self.database.list_issues(filter) {
+            Ok(issues) => {
+                self.database
+                    .record_successful_operation("issue_list", &context, None)?;
+                Ok(issues)
+            }
+            Err(error) => {
+                if let Err(audit_error) =
+                    self.database
+                        .record_failed_operation("issue_list", &context, &error)
+                {
+                    return Err(Self::failure_audit_error(
+                        "issue_list",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn status(&mut self) -> Result<crate::domain::Status, crate::error::AppError> {
+        let context = crate::domain::ExecutionContext::resolve()?;
+        let filter = crate::domain::IssueFilter {
+            projects: Vec::new(),
+            states: Vec::new(),
+            priorities: Vec::new(),
+            assignee: None,
+            updated_after: None,
+            query: None,
+            include_done: true,
+        };
+        match self.database.list_issues(&filter) {
+            Ok(issues) => {
+                let mut status = crate::domain::Status {
+                    attention: Vec::new(),
+                    stale: Vec::new(),
+                    blocked: Vec::new(),
+                    recently_completed: Vec::new(),
+                    active: Vec::new(),
+                };
+                for issue in issues {
+                    match issue.issue.state {
+                        crate::domain::IssueState::Blocked => status.blocked.push(issue),
+                        crate::domain::IssueState::Done | crate::domain::IssueState::Cancelled => {
+                            status.recently_completed.push(issue);
+                        }
+                        crate::domain::IssueState::Todo | crate::domain::IssueState::InProgress => {
+                            status.active.push(issue)
+                        }
+                    }
+                }
+                self.database
+                    .record_successful_operation("status", &context, None)?;
+                Ok(status)
+            }
+            Err(error) => {
+                if let Err(audit_error) = self
+                    .database
+                    .record_failed_operation("status", &context, &error)
+                {
+                    return Err(Self::failure_audit_error("status", &error, &audit_error));
+                }
+                Err(error)
+            }
+        }
+    }
+
     fn failure_audit_error(
         operation: &str,
         original_error: &crate::error::AppError,

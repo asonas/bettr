@@ -74,6 +74,41 @@ pub fn write_issue_human(project: &str, issue: &crate::domain::Issue) {
     );
 }
 
+pub fn write_issue_list_human(issues: &[crate::domain::IssueListItem]) {
+    for issue in issues {
+        write_issue_summary(issue);
+    }
+}
+
+pub fn write_status_human(status: &crate::domain::Status) {
+    write_status_section("attention", &status.attention);
+    write_status_section("stale", &status.stale);
+    write_status_section("blocked", &status.blocked);
+    write_status_section("recently completed", &status.recently_completed);
+    write_status_section("active", &status.active);
+}
+
+fn write_status_section(name: &str, issues: &[crate::domain::IssueListItem]) {
+    if issues.is_empty() {
+        return;
+    }
+    println!("{name}:");
+    for issue in issues {
+        print!("  ");
+        write_issue_summary(issue);
+    }
+}
+
+fn write_issue_summary(item: &crate::domain::IssueListItem) {
+    println!(
+        "{}#{} [{}] {}",
+        escape_terminal_controls(&item.project),
+        item.issue.number,
+        item.issue.state.as_str(),
+        escape_terminal_controls(&item.issue.title)
+    );
+}
+
 fn escape_terminal_controls(value: &str) -> String {
     value.chars().flat_map(char::escape_default).collect()
 }

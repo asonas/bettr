@@ -91,7 +91,7 @@ pub struct Project {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueState {
     Todo,
@@ -172,6 +172,33 @@ pub struct Issue {
     pub revision: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct IssueFilter {
+    pub projects: Vec<String>,
+    pub states: Vec<IssueState>,
+    pub priorities: Vec<Priority>,
+    pub assignee: Option<String>,
+    pub updated_after: Option<chrono::DateTime<chrono::Utc>>,
+    pub query: Option<String>,
+    pub include_done: bool,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct IssueListItem {
+    pub project: String,
+    #[serde(flatten)]
+    pub issue: Issue,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct Status {
+    pub attention: Vec<IssueListItem>,
+    pub stale: Vec<IssueListItem>,
+    pub blocked: Vec<IssueListItem>,
+    pub recently_completed: Vec<IssueListItem>,
+    pub active: Vec<IssueListItem>,
 }
 
 #[derive(Clone, Debug)]

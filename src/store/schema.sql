@@ -24,6 +24,11 @@ CREATE TABLE issues (
 CREATE INDEX issues_project_state_updated_at
     ON issues(project_id, state, updated_at);
 
+CREATE INDEX issues_state ON issues(state);
+CREATE INDEX issues_priority ON issues(priority);
+CREATE INDEX issues_assignee_name ON issues(assignee_name);
+CREATE INDEX issues_updated_at ON issues(updated_at);
+
 CREATE TABLE comments (
     id TEXT PRIMARY KEY,
     issue_id TEXT NOT NULL REFERENCES issues(id),

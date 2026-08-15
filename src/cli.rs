@@ -52,7 +52,7 @@ pub struct IssueCommand {
 pub enum IssueSubcommand {
     Create(IssueCreateCommand),
     Show(IssueShowCommand),
-    List,
+    List(IssueListCommand),
 }
 
 #[derive(clap::Args, Debug)]
@@ -73,4 +73,34 @@ pub struct IssueShowCommand {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct IssueListCommand {
+    #[arg(long)]
+    pub all_projects: bool,
+
+    #[arg(long, value_enum)]
+    pub state: Vec<crate::domain::IssueState>,
+
+    #[arg(long, value_enum)]
+    pub priority: Vec<crate::domain::Priority>,
+
+    #[arg(long)]
+    pub assignee: Option<String>,
+
+    #[arg(long, value_parser = parse_timestamp)]
+    pub updated_after: Option<chrono::DateTime<chrono::Utc>>,
+
+    #[arg(long)]
+    pub query: Option<String>,
+
+    #[arg(long)]
+    pub include_completed: bool,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct StatusCommand {}
+
+fn parse_timestamp(value: &str) -> Result<chrono::DateTime<chrono::Utc>, String> {
+    value
+        .parse::<chrono::DateTime<chrono::Utc>>()
+        .map_err(|_| "must be an RFC 3339 timestamp".to_owned())
+}
