@@ -1,4 +1,4 @@
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InitiatorKind {
     Agent,
@@ -17,7 +17,7 @@ impl InitiatorKind {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct ExecutionContext {
     pub kind: InitiatorKind,
     pub agent: Option<String>,
@@ -321,6 +321,33 @@ pub enum Priority {
     Urgent,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum AssigneeKind {
+    Human,
+    Agent,
+}
+
+impl AssigneeKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::Agent => "agent",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, crate::error::AppError> {
+        match value {
+            "human" => Ok(Self::Human),
+            "agent" => Ok(Self::Agent),
+            _ => Err(crate::error::AppError::Internal(format!(
+                "invalid assignee kind in database: {value}"
+            ))),
+        }
+    }
+}
+
 impl Priority {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -353,7 +380,7 @@ pub struct Issue {
     pub body: Option<String>,
     pub state: IssueState,
     pub priority: Option<Priority>,
-    pub assignee_kind: Option<String>,
+    pub assignee_kind: Option<AssigneeKind>,
     pub assignee_name: Option<String>,
     pub revision: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -396,27 +423,173 @@ pub struct NewIssue {
 
 impl NewIssue {
     pub fn validate(&self) -> Result<(), crate::error::AppError> {
-        if self.title.trim().is_empty() {
-            return Err(crate::error::AppError::InvalidInput(
-                "issue title must not be empty".to_owned(),
-            ));
-        }
-        if self.title.chars().count() > 500 {
-            return Err(crate::error::AppError::InvalidInput(
-                "issue title must contain at most 500 Unicode scalar values".to_owned(),
-            ));
-        }
-        if self
-            .body
-            .as_ref()
-            .is_some_and(|body| body.len() > 1_048_576)
+        validate_issue_title(&self.title)?;
+        validate_issue_body(self.body.as_deref())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct IssuePatch {
+    pub title: Option<String>,
+    pub body: Option<Option<String>>,
+    pub priority: Option<Option<Priority>>,
+    pub assignee_kind: Option<Option<AssigneeKind>>,
+    pub assignee_name: Option<Option<String>>,
+}
+
+impl IssuePatch {
+    pub fn validate(&self) -> Result<(), crate::error::AppError> {
+        if self.title.is_none()
+            && self.body.is_none()
+            && self.priority.is_none()
+            && self.assignee_kind.is_none()
+            && self.assignee_name.is_none()
         {
             return Err(crate::error::AppError::InvalidInput(
-                "issue body must contain at most 1 MiB".to_owned(),
+                "issue edit must change at least one field".to_owned(),
             ));
+        }
+        if let Some(title) = &self.title {
+            validate_issue_title(title)?;
+        }
+        if let Some(body) = &self.body {
+            validate_issue_body(body.as_deref())?;
+        }
+        if self.assignee_kind.is_some() != self.assignee_name.is_some() {
+            return Err(crate::error::AppError::InvalidInput(
+                "assignee kind and name must be provided together".to_owned(),
+            ));
+        }
+        if let (Some(kind), Some(name)) = (&self.assignee_kind, &self.assignee_name) {
+            if kind.is_some() != name.is_some() {
+                return Err(crate::error::AppError::InvalidInput(
+                    "assignee kind and name must be set or cleared together".to_owned(),
+                ));
+            }
+            if let Some(name) = name {
+                if name.trim().is_empty() {
+                    return Err(crate::error::AppError::InvalidInput(
+                        "assignee name must not be empty".to_owned(),
+                    ));
+                }
+                if name.chars().count() > 200 {
+                    return Err(crate::error::AppError::InvalidInput(
+                        "assignee name must contain at most 200 Unicode scalar values".to_owned(),
+                    ));
+                }
+            }
         }
         Ok(())
     }
+
+    pub fn apply_to(&self, issue: &mut Issue) {
+        if let Some(title) = &self.title {
+            issue.title.clone_from(title);
+        }
+        if let Some(body) = &self.body {
+            issue.body.clone_from(body);
+        }
+        if let Some(priority) = self.priority {
+            issue.priority = priority;
+        }
+        if let Some(assignee_kind) = self.assignee_kind {
+            issue.assignee_kind = assignee_kind;
+        }
+        if let Some(assignee_name) = &self.assignee_name {
+            issue.assignee_name.clone_from(assignee_name);
+        }
+    }
+
+    pub fn event_metadata(&self, revision: i64) -> serde_json::Value {
+        let mut changes = serde_json::Map::new();
+        if let Some(title) = &self.title {
+            changes.insert("title".to_owned(), title.clone().into());
+        }
+        if let Some(body) = &self.body {
+            changes.insert(
+                "body".to_owned(),
+                body.as_ref()
+                    .map_or(serde_json::Value::Null, |body| body.clone().into()),
+            );
+        }
+        if let Some(priority) = self.priority {
+            changes.insert(
+                "priority".to_owned(),
+                priority.map_or(serde_json::Value::Null, |priority| priority.as_str().into()),
+            );
+        }
+        if let Some(assignee_kind) = self.assignee_kind {
+            changes.insert(
+                "assignee_kind".to_owned(),
+                assignee_kind.map_or(serde_json::Value::Null, |kind| kind.as_str().into()),
+            );
+        }
+        if let Some(assignee_name) = &self.assignee_name {
+            changes.insert(
+                "assignee_name".to_owned(),
+                assignee_name
+                    .as_ref()
+                    .map_or(serde_json::Value::Null, |name| name.clone().into()),
+            );
+        }
+        serde_json::json!({ "changes": changes, "revision": revision })
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct Comment {
+    pub id: uuid::Uuid,
+    pub issue_id: uuid::Uuid,
+    pub body: String,
+    pub context: ExecutionContext,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct DomainEvent {
+    pub sequence: i64,
+    pub event_type: String,
+    pub revision: Option<i64>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub context: ExecutionContext,
+    pub metadata: serde_json::Value,
+}
+
+pub fn validate_comment_body(body: &str) -> Result<(), crate::error::AppError> {
+    if body.trim().is_empty() {
+        return Err(crate::error::AppError::InvalidInput(
+            "comment body must not be empty".to_owned(),
+        ));
+    }
+    if body.len() > 1_048_576 {
+        return Err(crate::error::AppError::InvalidInput(
+            "comment body must contain at most 1 MiB".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_issue_title(title: &str) -> Result<(), crate::error::AppError> {
+    if title.trim().is_empty() {
+        return Err(crate::error::AppError::InvalidInput(
+            "issue title must not be empty".to_owned(),
+        ));
+    }
+    if title.chars().count() > 500 {
+        return Err(crate::error::AppError::InvalidInput(
+            "issue title must contain at most 500 Unicode scalar values".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_issue_body(body: Option<&str>) -> Result<(), crate::error::AppError> {
+    if body.is_some_and(|body| body.len() > 1_048_576) {
+        return Err(crate::error::AppError::InvalidInput(
+            "issue body must contain at most 1 MiB".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 pub fn validate_project_name(name: &str) -> Result<(), crate::error::AppError> {

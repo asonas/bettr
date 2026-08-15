@@ -82,7 +82,8 @@ impl Database {
             Err(error) => return Err(Self::database_error(error)),
         }
 
-        let metadata_json = serde_json::json!({ "project_name": project.name }).to_string();
+        let metadata_json =
+            Self::event_metadata(serde_json::json!({ "project_name": project.name }), context)?;
         transaction
             .execute(
                 "INSERT INTO domain_events (id, sequence, project_id, event_type, metadata_json, created_at)
@@ -223,6 +224,10 @@ impl Database {
         updated_issue.state = target_state;
         updated_issue.revision = expected_revision + 1;
         updated_issue.updated_at = updated_at;
+        let event_metadata = Self::event_metadata(
+            transition.event_metadata(issue.state, target_state, updated_issue.revision),
+            context,
+        )?;
         transaction
             .execute(
                 "INSERT INTO domain_events (
@@ -236,9 +241,7 @@ impl Database {
                     updated_issue.project_id.to_string(),
                     updated_issue.id.to_string(),
                     transition.event_type(),
-                    transition
-                        .event_metadata(issue.state, target_state, updated_issue.revision)
-                        .to_string(),
+                    event_metadata,
                     updated_at.to_rfc3339(),
                 ],
             )
@@ -256,6 +259,219 @@ impl Database {
         transaction.commit().map_err(Self::database_error)?;
 
         Ok(updated_issue)
+    }
+
+    pub fn update_issue(
+        &mut self,
+        issue: &crate::domain::Issue,
+        expected_revision: i64,
+        patch: &crate::domain::IssuePatch,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(Self::database_error)?;
+        let updated_at = chrono::Utc::now();
+        let mut updated_issue = issue.clone();
+        patch.apply_to(&mut updated_issue);
+        updated_issue.revision = expected_revision + 1;
+        updated_issue.updated_at = updated_at;
+        let changed = transaction
+            .execute(
+                "UPDATE issues
+                 SET title = ?1, body = ?2, priority = ?3, assignee_kind = ?4,
+                     assignee_name = ?5, updated_at = ?6, revision = revision + 1
+                 WHERE id = ?7 AND revision = ?8",
+                rusqlite::params![
+                    updated_issue.title,
+                    updated_issue.body,
+                    updated_issue.priority.map(crate::domain::Priority::as_str),
+                    updated_issue
+                        .assignee_kind
+                        .map(crate::domain::AssigneeKind::as_str),
+                    updated_issue.assignee_name,
+                    updated_at.to_rfc3339(),
+                    issue.id.to_string(),
+                    expected_revision,
+                ],
+            )
+            .map_err(Self::database_error)?;
+        if changed == 0 {
+            let current_revision = transaction
+                .query_row(
+                    "SELECT revision FROM issues WHERE id = ?1",
+                    [issue.id.to_string()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => {
+                        crate::error::AppError::NotFound("issue not found".to_owned())
+                    }
+                    error => Self::database_error(error),
+                })?;
+            return Err(crate::error::AppError::RevisionConflict { current_revision });
+        }
+
+        let event_metadata =
+            Self::event_metadata(patch.event_metadata(updated_issue.revision), context)?;
+        transaction
+            .execute(
+                "INSERT INTO domain_events (
+                    id, sequence, project_id, issue_id, event_type, metadata_json, created_at
+                 ) VALUES (
+                    ?1, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM domain_events),
+                    ?2, ?3, 'issue_updated', ?4, ?5
+                 )",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    updated_issue.project_id.to_string(),
+                    updated_issue.id.to_string(),
+                    event_metadata,
+                    updated_at.to_rfc3339(),
+                ],
+            )
+            .map_err(Self::database_error)?;
+        let issue_id = updated_issue.id.to_string();
+        let audit_metadata = serde_json::json!({ "revision": updated_issue.revision }).to_string();
+        Self::insert_audit_event(
+            &transaction,
+            "issue_edit",
+            true,
+            context,
+            Some(("issue", &issue_id)),
+            &audit_metadata,
+        )?;
+        transaction.commit().map_err(Self::database_error)?;
+
+        Ok(updated_issue)
+    }
+
+    pub fn add_comment(
+        &mut self,
+        issue: &crate::domain::Issue,
+        body: &str,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::Comment, crate::error::AppError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(Self::database_error)?;
+        let comment = crate::domain::Comment {
+            id: uuid::Uuid::new_v4(),
+            issue_id: issue.id,
+            body: body.to_owned(),
+            context: context.clone(),
+            created_at: chrono::Utc::now(),
+        };
+        transaction
+            .execute(
+                "INSERT INTO comments (
+                    id, issue_id, body, author_kind, author_name, created_at, metadata_json
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    comment.id.to_string(),
+                    comment.issue_id.to_string(),
+                    comment.body,
+                    context.kind.as_str(),
+                    context.initiator_name(),
+                    comment.created_at.to_rfc3339(),
+                    serde_json::json!({ "session_id": context.session_id }).to_string(),
+                ],
+            )
+            .map_err(Self::database_error)?;
+        transaction
+            .execute(
+                "UPDATE issues SET updated_at = ?1 WHERE id = ?2",
+                rusqlite::params![
+                    comment.created_at.to_rfc3339(),
+                    comment.issue_id.to_string()
+                ],
+            )
+            .map_err(Self::database_error)?;
+        let event_metadata = Self::event_metadata(
+            serde_json::json!({ "comment_id": comment.id, "body": comment.body }),
+            context,
+        )?;
+        transaction
+            .execute(
+                "INSERT INTO domain_events (
+                    id, sequence, project_id, issue_id, event_type, metadata_json, created_at
+                 ) VALUES (
+                    ?1, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM domain_events),
+                    ?2, ?3, 'comment_added', ?4, ?5
+                 )",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    issue.project_id.to_string(),
+                    comment.issue_id.to_string(),
+                    event_metadata,
+                    comment.created_at.to_rfc3339(),
+                ],
+            )
+            .map_err(Self::database_error)?;
+        let issue_id = issue.id.to_string();
+        let audit_metadata = serde_json::json!({
+            "comment_id": comment.id,
+            "revision": issue.revision,
+        })
+        .to_string();
+        Self::insert_audit_event(
+            &transaction,
+            "issue_comment",
+            true,
+            context,
+            Some(("issue", &issue_id)),
+            &audit_metadata,
+        )?;
+        transaction.commit().map_err(Self::database_error)?;
+
+        Ok(comment)
+    }
+
+    pub fn issue_history(
+        &self,
+        issue_id: uuid::Uuid,
+    ) -> Result<Vec<crate::domain::DomainEvent>, crate::error::AppError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT sequence, event_type, metadata_json, created_at
+                 FROM domain_events WHERE issue_id = ?1 ORDER BY sequence ASC",
+            )
+            .map_err(Self::database_error)?;
+        let mut rows = statement
+            .query([issue_id.to_string()])
+            .map_err(Self::database_error)?;
+        let mut events = Vec::new();
+        while let Some(row) = rows.next().map_err(Self::database_error)? {
+            let metadata_json: String = row.get(2).map_err(Self::database_error)?;
+            let mut metadata: serde_json::Value = serde_json::from_str(&metadata_json)
+                .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
+            let context = metadata
+                .as_object_mut()
+                .and_then(|metadata| metadata.remove("context"))
+                .ok_or_else(|| {
+                    crate::error::AppError::Internal(
+                        "domain event is missing execution context".to_owned(),
+                    )
+                })?;
+            let context = serde_json::from_value(context)
+                .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
+            let revision = metadata.get("revision").and_then(serde_json::Value::as_i64);
+            let created_at: String = row.get(3).map_err(Self::database_error)?;
+            events.push(crate::domain::DomainEvent {
+                sequence: row.get(0).map_err(Self::database_error)?,
+                event_type: row.get(1).map_err(Self::database_error)?,
+                revision,
+                created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
+                    .map_err(|error| crate::error::AppError::Internal(error.to_string()))?
+                    .with_timezone(&chrono::Utc),
+                context,
+                metadata,
+            });
+        }
+        Ok(events)
     }
 
     pub fn list_issues(
@@ -458,7 +674,7 @@ impl Database {
                     issue.body,
                     issue.state.as_str(),
                     issue.priority.map(crate::domain::Priority::as_str),
-                    issue.assignee_kind,
+                    issue.assignee_kind.map(crate::domain::AssigneeKind::as_str),
                     issue.assignee_name,
                     issue.revision,
                     issue.created_at.to_rfc3339(),
@@ -466,6 +682,10 @@ impl Database {
                 ],
             )
             .map_err(Self::database_error)?;
+        let event_metadata = Self::event_metadata(
+            serde_json::json!({ "number": issue.number, "revision": issue.revision }),
+            context,
+        )?;
         transaction
             .execute(
                 "INSERT INTO domain_events (id, sequence, project_id, issue_id, event_type, metadata_json, created_at)
@@ -475,7 +695,7 @@ impl Database {
                     issue.project_id.to_string(),
                     issue.id.to_string(),
                     "issue_created",
-                    serde_json::json!({ "number": issue.number, "revision": issue.revision }).to_string(),
+                    event_metadata,
                     issue.created_at.to_rfc3339(),
                 ],
             )
@@ -543,6 +763,7 @@ impl Database {
         let project_id: String = row.get(offset + 1)?;
         let state: String = row.get(offset + 5)?;
         let priority: Option<String> = row.get(offset + 6)?;
+        let assignee_kind: Option<String> = row.get(offset + 7)?;
         let created_at: String = row.get(offset + 10)?;
         let updated_at: String = row.get(offset + 11)?;
         let parse_error = |error: Box<dyn std::error::Error + Send + Sync>| {
@@ -561,7 +782,10 @@ impl Database {
                 .map(|value| crate::domain::Priority::parse(&value))
                 .transpose()
                 .map_err(|error| parse_error(Box::new(error)))?,
-            assignee_kind: row.get(offset + 7)?,
+            assignee_kind: assignee_kind
+                .map(|value| crate::domain::AssigneeKind::parse(&value))
+                .transpose()
+                .map_err(|error| parse_error(Box::new(error)))?,
             assignee_name: row.get(offset + 8)?,
             revision: row.get(offset + 9)?,
             created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
@@ -595,6 +819,21 @@ impl Database {
             .replace('\\', "\\\\")
             .replace('%', "\\%")
             .replace('_', "\\_")
+    }
+
+    fn event_metadata(
+        mut metadata: serde_json::Value,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<String, crate::error::AppError> {
+        let object = metadata.as_object_mut().ok_or_else(|| {
+            crate::error::AppError::Internal("domain event metadata must be an object".to_owned())
+        })?;
+        object.insert(
+            "context".to_owned(),
+            serde_json::to_value(context)
+                .map_err(|error| crate::error::AppError::Internal(error.to_string()))?,
+        );
+        Ok(metadata.to_string())
     }
 
     fn create_parent_directory(path: &std::path::Path) -> Result<(), crate::error::AppError> {

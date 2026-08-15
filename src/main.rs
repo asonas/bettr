@@ -160,6 +160,48 @@ fn run(
                         crate::output::OutputMode::Json => crate::output::write_success(issues),
                     }
                 }
+                crate::cli::IssueSubcommand::Edit(command) => {
+                    let project = cli.project.as_deref().ok_or_else(|| {
+                        crate::error::AppError::InvalidInput("--project is required".to_owned())
+                    })?;
+                    let number = command.target.number;
+                    let revision = command.target.revision;
+                    let patch = command.into_patch();
+                    let context = crate::domain::ExecutionContext::resolve()?;
+                    let issue = app.update_issue(project, number, revision, patch, &context)?;
+                    match output_mode {
+                        crate::output::OutputMode::Human => {
+                            crate::output::write_issue_human(project, &issue)
+                        }
+                        crate::output::OutputMode::Json => crate::output::write_success(issue),
+                    }
+                }
+                crate::cli::IssueSubcommand::Comment(command) => {
+                    let project = cli.project.as_deref().ok_or_else(|| {
+                        crate::error::AppError::InvalidInput("--project is required".to_owned())
+                    })?;
+                    let context = crate::domain::ExecutionContext::resolve()?;
+                    let comment =
+                        app.add_comment(project, command.number, &command.body, &context)?;
+                    match output_mode {
+                        crate::output::OutputMode::Human => {
+                            crate::output::write_comment_human(&comment)
+                        }
+                        crate::output::OutputMode::Json => crate::output::write_success(comment),
+                    }
+                }
+                crate::cli::IssueSubcommand::History(command) => {
+                    let project = cli.project.as_deref().ok_or_else(|| {
+                        crate::error::AppError::InvalidInput("--project is required".to_owned())
+                    })?;
+                    let history = app.issue_history(project, command.number)?;
+                    match output_mode {
+                        crate::output::OutputMode::Human => {
+                            crate::output::write_issue_history_human(&history)
+                        }
+                        crate::output::OutputMode::Json => crate::output::write_success(history),
+                    }
+                }
                 crate::cli::IssueSubcommand::Start(command) => run_issue_transition(
                     &mut app,
                     cli.project.as_deref(),

@@ -121,6 +121,130 @@ impl App {
         }
     }
 
+    pub fn update_issue(
+        &mut self,
+        project: &str,
+        number: i64,
+        expected_revision: i64,
+        patch: crate::domain::IssuePatch,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        let result = (|| {
+            if number < 1 {
+                return Err(crate::error::AppError::InvalidInput(
+                    "issue number must be positive".to_owned(),
+                ));
+            }
+            if expected_revision < 1 {
+                return Err(crate::error::AppError::InvalidInput(
+                    "issue revision must be positive".to_owned(),
+                ));
+            }
+            patch.validate()?;
+
+            let issue = self.database.show_issue(project, number)?;
+            if issue.revision != expected_revision {
+                return Err(crate::error::AppError::RevisionConflict {
+                    current_revision: issue.revision,
+                });
+            }
+            self.database
+                .update_issue(&issue, expected_revision, &patch, context)
+        })();
+
+        match result {
+            Ok(issue) => Ok(issue),
+            Err(error) => {
+                if let Err(audit_error) =
+                    self.database
+                        .record_failed_operation("issue_edit", context, &error)
+                {
+                    return Err(Self::failure_audit_error(
+                        "issue_edit",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn add_comment(
+        &mut self,
+        project: &str,
+        number: i64,
+        body: &str,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::Comment, crate::error::AppError> {
+        let result = (|| {
+            if number < 1 {
+                return Err(crate::error::AppError::InvalidInput(
+                    "issue number must be positive".to_owned(),
+                ));
+            }
+            crate::domain::validate_comment_body(body)?;
+            let issue = self.database.show_issue(project, number)?;
+            self.database.add_comment(&issue, body, context)
+        })();
+
+        match result {
+            Ok(comment) => Ok(comment),
+            Err(error) => {
+                if let Err(audit_error) =
+                    self.database
+                        .record_failed_operation("issue_comment", context, &error)
+                {
+                    return Err(Self::failure_audit_error(
+                        "issue_comment",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn issue_history(
+        &mut self,
+        project: &str,
+        number: i64,
+    ) -> Result<Vec<crate::domain::DomainEvent>, crate::error::AppError> {
+        if number < 1 {
+            return Err(crate::error::AppError::InvalidInput(
+                "issue number must be positive".to_owned(),
+            ));
+        }
+
+        let context = crate::domain::ExecutionContext::resolve()?;
+        match self.database.show_issue(project, number) {
+            Ok(issue) => {
+                let history = self.database.issue_history(issue.id)?;
+                let issue_id = issue.id.to_string();
+                self.database.record_successful_operation(
+                    "issue_history",
+                    &context,
+                    Some(("issue", &issue_id)),
+                )?;
+                Ok(history)
+            }
+            Err(error) => {
+                if let Err(audit_error) =
+                    self.database
+                        .record_failed_operation("issue_history", &context, &error)
+                {
+                    return Err(Self::failure_audit_error(
+                        "issue_history",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
     pub fn transition_issue(
         &mut self,
         project: &str,

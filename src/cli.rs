@@ -53,6 +53,9 @@ pub enum IssueSubcommand {
     Create(IssueCreateCommand),
     Show(IssueShowCommand),
     List(IssueListCommand),
+    Edit(IssueEditCommand),
+    Comment(IssueCommentCommand),
+    History(IssueHistoryCommand),
     Start(IssueStartCommand),
     Block(IssueBlockCommand),
     Resume(IssueResumeCommand),
@@ -75,6 +78,80 @@ pub struct IssueCreateCommand {
 
 #[derive(clap::Args, Debug)]
 pub struct IssueShowCommand {
+    pub number: i64,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueEditCommand {
+    #[command(flatten)]
+    pub target: IssueTransitionTarget,
+
+    #[arg(long)]
+    pub title: Option<String>,
+
+    #[arg(long, conflicts_with = "clear_body")]
+    pub body: Option<String>,
+
+    #[arg(long, conflicts_with = "body")]
+    pub clear_body: bool,
+
+    #[arg(long, value_enum, conflicts_with = "clear_priority")]
+    pub priority: Option<crate::domain::Priority>,
+
+    #[arg(long, conflicts_with = "priority")]
+    pub clear_priority: bool,
+
+    #[arg(long, value_enum, conflicts_with = "clear_assignee")]
+    pub assignee_kind: Option<crate::domain::AssigneeKind>,
+
+    #[arg(long, conflicts_with = "clear_assignee")]
+    pub assignee_name: Option<String>,
+
+    #[arg(
+        long,
+        conflicts_with_all = ["assignee_kind", "assignee_name"]
+    )]
+    pub clear_assignee: bool,
+}
+
+impl IssueEditCommand {
+    pub fn into_patch(self) -> crate::domain::IssuePatch {
+        crate::domain::IssuePatch {
+            title: self.title,
+            body: if self.clear_body {
+                Some(None)
+            } else {
+                self.body.map(Some)
+            },
+            priority: if self.clear_priority {
+                Some(None)
+            } else {
+                self.priority.map(Some)
+            },
+            assignee_kind: if self.clear_assignee {
+                Some(None)
+            } else {
+                self.assignee_kind.map(Some)
+            },
+            assignee_name: if self.clear_assignee {
+                Some(None)
+            } else {
+                self.assignee_name.map(Some)
+            },
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueCommentCommand {
+    pub number: i64,
+
+    #[arg(long)]
+    pub body: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueHistoryCommand {
     pub number: i64,
 }
 

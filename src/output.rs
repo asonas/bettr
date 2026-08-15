@@ -85,6 +85,27 @@ pub fn write_issue_list_human(issues: &[crate::domain::IssueListItem]) {
     }
 }
 
+pub fn write_comment_human(comment: &crate::domain::Comment) {
+    println!("{}", comment.id);
+    println!("{}", escape_terminal_controls(&comment.body));
+}
+
+pub fn write_issue_history_human(events: &[crate::domain::DomainEvent]) {
+    for event in events {
+        let revision = event
+            .revision
+            .map_or_else(|| "-".to_owned(), |revision| revision.to_string());
+        println!(
+            "{} {} {} {} {}",
+            event.sequence,
+            escape_terminal_controls(&event.event_type),
+            revision,
+            event.created_at.to_rfc3339(),
+            escape_terminal_controls(&event.metadata.to_string())
+        );
+    }
+}
+
 pub fn write_status_human(status: &crate::domain::Status) {
     write_status_section("attention", &status.attention);
     write_status_section("stale", &status.stale);
