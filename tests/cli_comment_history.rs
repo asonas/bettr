@@ -285,6 +285,47 @@ fn issue_history_projects_domain_events_in_sequence_without_audit_reads() {
 }
 
 #[test]
+fn issue_history_read_failures_are_audited() {
+    let app = initialized_issue();
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    let issue_id = connection
+        .query_row("SELECT id FROM issues WHERE number = 1", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE domain_events SET metadata_json = '{}' WHERE issue_id = ?1",
+            [&issue_id],
+        )
+        .unwrap();
+    drop(connection);
+
+    app.command()
+        .args(["issue", "history", "1", "--project", "bettr", "--json"])
+        .assert()
+        .code(10);
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    let audit = connection
+        .query_row(
+            "SELECT success, exit_code, target_id, revision FROM audit_events
+             WHERE operation = 'issue_history' ORDER BY rowid DESC LIMIT 1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(audit, (0, 10, Some(issue_id), Some(1)));
+}
+
+#[test]
 fn comment_and_activity_update_roll_back_when_the_domain_event_fails() {
     let app = initialized_issue();
     let before = issue_json(&app);

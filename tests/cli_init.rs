@@ -41,6 +41,19 @@ fn init_creates_a_version_one_database_once() {
 
     assert!(app.database.is_file());
     assert_eq!(std::fs::metadata(&app.database).unwrap().ino(), inode);
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM audit_events
+                 WHERE operation = 'init' AND success = 0 AND exit_code = 2",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
 }
 
 #[test]

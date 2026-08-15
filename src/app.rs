@@ -229,8 +229,7 @@ impl App {
                     "audit_list",
                     &context,
                     &error,
-                    None,
-                    None,
+                    &crate::store::AuditSubject::default(),
                     started_at,
                 ) {
                     return Err(Self::failure_audit_error(
@@ -257,6 +256,7 @@ impl App {
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::Project, crate::error::AppError> {
         let started_at = chrono::Utc::now();
+        let subject = self.database.project_audit_subject(name);
         match crate::domain::validate_project_name(name)
             .and_then(|()| self.database.create_project(name, context))
         {
@@ -266,8 +266,7 @@ impl App {
                     "project_create",
                     context,
                     &error,
-                    Some(name),
-                    None,
+                    &subject,
                     started_at,
                 ) {
                     return Err(Self::failure_audit_error(
@@ -301,8 +300,7 @@ impl App {
                     "project_list",
                     &context,
                     &error,
-                    None,
-                    None,
+                    &crate::store::AuditSubject::default(),
                     started_at,
                 ) {
                     return Err(Self::failure_audit_error(
@@ -323,6 +321,7 @@ impl App {
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::Issue, crate::error::AppError> {
         let started_at = chrono::Utc::now();
+        let subject = self.database.project_audit_subject(project);
         match input
             .validate()
             .and_then(|()| self.database.create_issue(project, &input, context))
@@ -333,8 +332,7 @@ impl App {
                     "issue_create",
                     context,
                     &error,
-                    Some(project),
-                    None,
+                    &subject,
                     started_at,
                 ) {
                     return Err(Self::failure_audit_error(
@@ -355,12 +353,16 @@ impl App {
     ) -> Result<crate::domain::Issue, crate::error::AppError> {
         let started_at = chrono::Utc::now();
         let context = crate::domain::ExecutionContext::resolve()?;
+        let crate::store::IssueLookup {
+            result: issue_result,
+            subject,
+        } = self.database.show_issue(project, number);
         let result = if number < 1 {
             Err(crate::error::AppError::InvalidInput(
                 "issue number must be positive".to_owned(),
             ))
         } else {
-            self.database.show_issue(project, number)
+            issue_result
         };
         match result {
             Ok(issue) => {
@@ -380,8 +382,7 @@ impl App {
                     "issue_show",
                     &context,
                     &error,
-                    Some(project),
-                    Some(number),
+                    &subject,
                     started_at,
                 ) {
                     return Err(Self::failure_audit_error(
@@ -404,6 +405,10 @@ impl App {
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::Issue, crate::error::AppError> {
         let started_at = chrono::Utc::now();
+        let crate::store::IssueLookup {
+            result: issue_result,
+            subject,
+        } = self.database.show_issue(project, number);
         let result = (|| {
             if number < 1 {
                 return Err(crate::error::AppError::InvalidInput(
@@ -417,7 +422,7 @@ impl App {
             }
             patch.validate()?;
 
-            let issue = self.database.show_issue(project, number)?;
+            let issue = issue_result?;
             if issue.revision != expected_revision {
                 return Err(crate::error::AppError::RevisionConflict {
                     current_revision: issue.revision,
@@ -434,8 +439,7 @@ impl App {
                     "issue_edit",
                     context,
                     &error,
-                    Some(project),
-                    Some(number),
+                    &subject,
                     started_at,
                 ) {
                     return Err(Self::failure_audit_error(
@@ -457,6 +461,10 @@ impl App {
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::Comment, crate::error::AppError> {
         let started_at = chrono::Utc::now();
+        let crate::store::IssueLookup {
+            result: issue_result,
+            subject,
+        } = self.database.show_issue(project, number);
         let result = (|| {
             if number < 1 {
                 return Err(crate::error::AppError::InvalidInput(
@@ -464,7 +472,7 @@ impl App {
                 ));
             }
             crate::domain::validate_comment_body(body)?;
-            let issue = self.database.show_issue(project, number)?;
+            let issue = issue_result?;
             self.database.add_comment(&issue, body, context)
         })();
 
@@ -475,8 +483,7 @@ impl App {
                     "issue_comment",
                     context,
                     &error,
-                    Some(project),
-                    Some(number),
+                    &subject,
                     started_at,
                 ) {
                     return Err(Self::failure_audit_error(
@@ -497,16 +504,22 @@ impl App {
     ) -> Result<Vec<crate::domain::DomainEvent>, crate::error::AppError> {
         let started_at = chrono::Utc::now();
         let context = crate::domain::ExecutionContext::resolve()?;
-        let result = if number < 1 {
-            Err(crate::error::AppError::InvalidInput(
-                "issue number must be positive".to_owned(),
-            ))
-        } else {
-            self.database.show_issue(project, number)
-        };
+        let crate::store::IssueLookup {
+            result: issue_result,
+            subject,
+        } = self.database.show_issue(project, number);
+        let result = (|| {
+            if number < 1 {
+                return Err(crate::error::AppError::InvalidInput(
+                    "issue number must be positive".to_owned(),
+                ));
+            }
+            let issue = issue_result?;
+            let history = self.database.issue_history(issue.id)?;
+            Ok((issue, history))
+        })();
         match result {
-            Ok(issue) => {
-                let history = self.database.issue_history(issue.id)?;
+            Ok((issue, history)) => {
                 let issue_id = issue.id.to_string();
                 self.database.record_successful_operation(
                     "issue_history",
@@ -523,8 +536,7 @@ impl App {
                     "issue_history",
                     &context,
                     &error,
-                    Some(project),
-                    Some(number),
+                    &subject,
                     started_at,
                 ) {
                     return Err(Self::failure_audit_error(
@@ -543,12 +555,17 @@ impl App {
         project: &str,
         number: i64,
         expected_revision: i64,
-        transition: crate::domain::Transition,
+        operation: &'static str,
+        transition: Result<crate::domain::Transition, crate::domain::DomainError>,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::Issue, crate::error::AppError> {
-        let operation = transition.operation();
         let started_at = chrono::Utc::now();
+        let crate::store::IssueLookup {
+            result: issue_result,
+            subject,
+        } = self.database.show_issue(project, number);
         let result = (|| {
+            let transition = transition?;
             if number < 1 {
                 return Err(crate::error::AppError::InvalidInput(
                     "issue number must be positive".to_owned(),
@@ -560,7 +577,7 @@ impl App {
                 ));
             }
 
-            let issue = self.database.show_issue(project, number)?;
+            let issue = issue_result?;
             if issue.revision != expected_revision {
                 return Err(crate::error::AppError::RevisionConflict {
                     current_revision: issue.revision,
@@ -579,14 +596,10 @@ impl App {
         match result {
             Ok(issue) => Ok(issue),
             Err(error) => {
-                if let Err(audit_error) = self.database.record_failed_operation(
-                    operation,
-                    context,
-                    &error,
-                    Some(project),
-                    Some(number),
-                    started_at,
-                ) {
+                if let Err(audit_error) = self
+                    .database
+                    .record_failed_operation(operation, context, &error, &subject, started_at)
+                {
                     return Err(Self::failure_audit_error(operation, &error, &audit_error));
                 }
                 Err(error)
@@ -600,6 +613,11 @@ impl App {
     ) -> Result<Vec<crate::domain::IssueListItem>, crate::error::AppError> {
         let started_at = chrono::Utc::now();
         let context = crate::domain::ExecutionContext::resolve()?;
+        let subject = filter
+            .projects
+            .first()
+            .map(|project| self.database.project_audit_subject(project))
+            .unwrap_or_default();
         match self.database.list_issues(filter) {
             Ok(issues) => {
                 self.database.record_successful_operation(
@@ -617,8 +635,7 @@ impl App {
                     "issue_list",
                     &context,
                     &error,
-                    filter.projects.first().map(String::as_str),
-                    None,
+                    &subject,
                     started_at,
                 ) {
                     return Err(Self::failure_audit_error(
@@ -670,10 +687,13 @@ impl App {
                 Ok(status)
             }
             Err(error) => {
-                if let Err(audit_error) = self
-                    .database
-                    .record_failed_operation("status", &context, &error, None, None, started_at)
-                {
+                if let Err(audit_error) = self.database.record_failed_operation(
+                    "status",
+                    &context,
+                    &error,
+                    &crate::store::AuditSubject::default(),
+                    started_at,
+                ) {
                     return Err(Self::failure_audit_error("status", &error, &audit_error));
                 }
                 Err(error)

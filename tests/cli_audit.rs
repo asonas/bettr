@@ -197,6 +197,48 @@ fn audit_list_exposes_complete_safe_success_and_failure_events() {
 }
 
 #[test]
+fn transition_constructor_failures_are_audited() {
+    let (app, _project, _issue) = initialized_issue();
+    let cases = [
+        (
+            "block",
+            &["--reason", " ", "--wait-kind", "dependency"][..],
+            "issue_block",
+        ),
+        (
+            "complete",
+            &["--summary", " ", "--verification", "cargo test passed"][..],
+            "issue_complete",
+        ),
+        ("cancel", &["--reason", " "][..], "issue_cancel"),
+        ("reopen", &["--reason", " "][..], "issue_reopen"),
+    ];
+
+    for (command, arguments, _operation) in cases {
+        let mut command_arguments = vec!["issue", command, "1", "--project", "bettr"];
+        command_arguments.extend_from_slice(arguments);
+        command_arguments.extend_from_slice(&["--revision", "1", "--json"]);
+        app.command().args(command_arguments).assert().code(2);
+    }
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    for (_, _, operation) in cases {
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM audit_events
+                     WHERE operation = ?1 AND success = 0 AND exit_code = 2",
+                    [operation],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1,
+            "missing failure audit for {operation}"
+        );
+    }
+}
+
+#[test]
 fn audit_list_filters_safe_events_by_every_supported_dimension() {
     let (app, project, _issue) = initialized_issue();
     let project_id = project["id"].as_str().unwrap();

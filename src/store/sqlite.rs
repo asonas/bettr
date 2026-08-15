@@ -15,10 +15,15 @@ struct AuditInsert<'a> {
 }
 
 #[derive(Default)]
-struct AuditSubject {
+pub(crate) struct AuditSubject {
     project: Option<(uuid::Uuid, String)>,
     target: Option<(String, String)>,
     revision: Option<i64>,
+}
+
+pub(crate) struct IssueLookup {
+    pub result: Result<crate::domain::Issue, crate::error::AppError>,
+    pub subject: AuditSubject,
 }
 
 impl Database {
@@ -36,7 +41,18 @@ impl Database {
         {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(crate::error::AppError::DatabaseAlreadyInitialized);
+                let error = crate::error::AppError::DatabaseAlreadyInitialized;
+                if Self::is_initialized_database(path).unwrap_or(false) {
+                    let mut database = Self::open_existing(path)?;
+                    database.record_failed_operation(
+                        "init",
+                        context,
+                        &error,
+                        &AuditSubject::default(),
+                        started_at,
+                    )?;
+                }
+                return Err(error);
             }
             Err(error) => return Err(crate::error::AppError::Internal(error.to_string())),
         };
@@ -180,21 +196,35 @@ impl Database {
         unreachable!("the retry loop always returns")
     }
 
-    pub fn show_issue(
-        &self,
-        project_name: &str,
-        number: i64,
-    ) -> Result<crate::domain::Issue, crate::error::AppError> {
-        let project_id = self.project_id(project_name)?;
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT id, project_id, number, title, body, state, priority, assignee_kind,
+    pub fn show_issue(&self, project_name: &str, number: i64) -> IssueLookup {
+        let project_id = match self.project_id(project_name) {
+            Ok(project_id) => project_id,
+            Err(error) => {
+                return IssueLookup {
+                    result: Err(error),
+                    subject: AuditSubject::default(),
+                };
+            }
+        };
+        let mut subject = AuditSubject {
+            project: Some((project_id, project_name.to_owned())),
+            target: None,
+            revision: None,
+        };
+        let mut statement = match self.connection.prepare(
+            "SELECT id, project_id, number, title, body, state, priority, assignee_kind,
                         assignee_name, revision, created_at, updated_at
                  FROM issues WHERE project_id = ?1 AND number = ?2",
-            )
-            .map_err(Self::database_error)?;
-        statement
+        ) {
+            Ok(statement) => statement,
+            Err(error) => {
+                return IssueLookup {
+                    result: Err(Self::database_error(error)),
+                    subject,
+                };
+            }
+        };
+        let result = statement
             .query_row(
                 rusqlite::params![project_id.to_string(), number],
                 Self::issue_from_row,
@@ -204,7 +234,12 @@ impl Database {
                     crate::error::AppError::NotFound("issue not found".to_owned())
                 }
                 error => Self::database_error(error),
-            })
+            });
+        if let Ok(issue) = &result {
+            subject.target = Some(("issue".to_owned(), issue.id.to_string()));
+            subject.revision = Some(issue.revision);
+        }
+        IssueLookup { result, subject }
     }
 
     pub fn transition_issue(
@@ -707,11 +742,9 @@ impl Database {
         operation: &str,
         context: &crate::domain::ExecutionContext,
         error: &crate::error::AppError,
-        project_name: Option<&str>,
-        issue_number: Option<i64>,
+        subject: &AuditSubject,
         started_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), crate::error::AppError> {
-        let subject = self.audit_subject(project_name, issue_number)?;
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -731,7 +764,12 @@ impl Database {
                     .project
                     .as_ref()
                     .map(|(project_id, project_name)| (*project_id, project_name.as_str())),
-                revision: subject.revision,
+                revision: match error {
+                    crate::error::AppError::RevisionConflict { current_revision } => {
+                        Some(*current_revision)
+                    }
+                    _ => subject.revision,
+                },
                 started_at,
                 exit_code: error.exit_code() as u8,
                 metadata_json: &metadata_json,
@@ -782,43 +820,16 @@ impl Database {
         Ok(())
     }
 
-    fn audit_subject(
-        &self,
-        project_name: Option<&str>,
-        issue_number: Option<i64>,
-    ) -> Result<AuditSubject, crate::error::AppError> {
-        let Some(project_name) = project_name else {
-            return Ok(AuditSubject::default());
+    pub(crate) fn project_audit_subject(&self, project_name: &str) -> AuditSubject {
+        let project_id = match self.project_id(project_name) {
+            Ok(project_id) => project_id,
+            Err(_) => return AuditSubject::default(),
         };
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT p.id, p.name, i.id, i.revision
-                 FROM projects p
-                 LEFT JOIN issues i ON i.project_id = p.id AND i.number = ?2
-                 WHERE p.name = ?1",
-            )
-            .map_err(Self::database_error)?;
-        let subject = statement.query_row(rusqlite::params![project_name, issue_number], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<i64>>(3)?,
-            ))
-        });
-        let (project_id, project_name, issue_id, revision) = match subject {
-            Ok(subject) => subject,
-            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(AuditSubject::default()),
-            Err(error) => return Err(Self::database_error(error)),
-        };
-        let project_id = uuid::Uuid::parse_str(&project_id)
-            .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
-        Ok(AuditSubject {
-            project: Some((project_id, project_name)),
-            target: issue_id.map(|issue_id| ("issue".to_owned(), issue_id)),
-            revision,
-        })
+        AuditSubject {
+            project: Some((project_id, project_name.to_owned())),
+            target: None,
+            revision: None,
+        }
     }
 
     fn audit_event_from_row(
@@ -1231,6 +1242,33 @@ impl Database {
         Ok(Self { connection })
     }
 
+    fn is_initialized_database(path: &std::path::Path) -> Result<bool, crate::error::AppError> {
+        let connection =
+            rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .map_err(Self::database_error)?;
+        let version = connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .map_err(Self::database_error)?;
+        let table_count = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema
+                 WHERE type = 'table'
+                   AND name IN ('projects', 'issues', 'comments', 'domain_events', 'audit_events')",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(Self::database_error)?;
+        let audit_column_count = connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('audit_events')",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(Self::database_error)?;
+
+        Ok(version == 1 && table_count == 5 && audit_column_count == 16)
+    }
+
     fn initialize_schema(
         &mut self,
         context: &crate::domain::ExecutionContext,
@@ -1289,6 +1327,22 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
+    fn context() -> crate::domain::ExecutionContext {
+        crate::domain::ExecutionContext {
+            kind: crate::domain::InitiatorKind::Agent,
+            agent: Some("test-agent".to_owned()),
+            session_id: Some("test-session".to_owned()),
+            operator: None,
+        }
+    }
+
+    fn initialized_database() -> (tempfile::TempDir, super::Database) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("bettr.db");
+        let database = super::Database::initialize(&path, &context(), chrono::Utc::now()).unwrap();
+        (directory, database)
+    }
+
     #[test]
     fn cleanup_failure_is_returned_to_the_caller() {
         let directory = tempfile::tempdir().unwrap();
@@ -1302,5 +1356,103 @@ mod tests {
             crate::error::AppError::Internal(message)
                 if message.contains("failed to remove newly created database")
         ));
+    }
+
+    #[test]
+    fn failure_audit_does_not_attach_an_issue_created_after_the_operation_failed() {
+        let (_directory, mut database) = initialized_database();
+        database.create_project("bettr", &context()).unwrap();
+        let error = crate::error::AppError::NotFound("issue not found".to_owned());
+        let operation_lookup = database.show_issue("bettr", 1);
+        assert!(matches!(
+            operation_lookup.result,
+            Err(crate::error::AppError::NotFound(_))
+        ));
+        let subject = operation_lookup.subject;
+
+        database
+            .create_issue(
+                "bettr",
+                &crate::domain::NewIssue {
+                    title: "created after failure".to_owned(),
+                    body: None,
+                    priority: None,
+                },
+                &context(),
+            )
+            .unwrap();
+        database
+            .record_failed_operation(
+                "issue_show",
+                &context(),
+                &error,
+                &subject,
+                chrono::Utc::now(),
+            )
+            .unwrap();
+
+        let target_id = database
+            .connection
+            .query_row(
+                "SELECT target_id FROM audit_events
+                 WHERE operation = 'issue_show' AND success = 0
+                 ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .unwrap();
+        assert!(target_id.is_none());
+    }
+
+    #[test]
+    fn revision_conflict_audit_uses_the_revision_seen_by_the_failed_operation() {
+        let (_directory, mut database) = initialized_database();
+        database.create_project("bettr", &context()).unwrap();
+        let issue = database
+            .create_issue(
+                "bettr",
+                &crate::domain::NewIssue {
+                    title: "conflicting issue".to_owned(),
+                    body: None,
+                    priority: None,
+                },
+                &context(),
+            )
+            .unwrap();
+        let error = crate::error::AppError::RevisionConflict {
+            current_revision: 2,
+        };
+        let operation_lookup = database.show_issue("bettr", 1);
+        assert!(operation_lookup.result.is_ok());
+        let subject = operation_lookup.subject;
+
+        database
+            .connection
+            .execute(
+                "UPDATE issues SET revision = 3 WHERE id = ?1",
+                [issue.id.to_string()],
+            )
+            .unwrap();
+        database
+            .record_failed_operation(
+                "issue_edit",
+                &context(),
+                &error,
+                &subject,
+                chrono::Utc::now(),
+            )
+            .unwrap();
+
+        let revision = database
+            .connection
+            .query_row(
+                "SELECT revision FROM audit_events
+                 WHERE operation = 'issue_edit' AND success = 0
+                 ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .unwrap();
+        assert_eq!(revision, Some(2));
     }
 }

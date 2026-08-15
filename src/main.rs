@@ -209,6 +209,7 @@ fn run(
                     &mut app,
                     project.as_deref(),
                     command.target,
+                    "issue_start",
                     Ok(crate::domain::Transition::Start),
                     output_mode,
                 )?,
@@ -216,6 +217,7 @@ fn run(
                     &mut app,
                     project.as_deref(),
                     command.target,
+                    "issue_block",
                     crate::domain::Transition::block(command.reason, command.wait_kind),
                     output_mode,
                 )?,
@@ -223,6 +225,7 @@ fn run(
                     &mut app,
                     project.as_deref(),
                     command.target,
+                    "issue_resume",
                     Ok(crate::domain::Transition::Resume),
                     output_mode,
                 )?,
@@ -230,6 +233,7 @@ fn run(
                     &mut app,
                     project.as_deref(),
                     command.target,
+                    "issue_complete",
                     crate::domain::Transition::complete(command.summary, command.verification),
                     output_mode,
                 )?,
@@ -237,6 +241,7 @@ fn run(
                     &mut app,
                     project.as_deref(),
                     command.target,
+                    "issue_cancel",
                     crate::domain::Transition::cancel(command.reason),
                     output_mode,
                 )?,
@@ -244,6 +249,7 @@ fn run(
                     &mut app,
                     project.as_deref(),
                     command.target,
+                    "issue_reopen",
                     crate::domain::Transition::reopen(command.reason),
                     output_mode,
                 )?,
@@ -307,17 +313,18 @@ fn run_issue_transition(
     app: &mut crate::app::App,
     project: Option<&str>,
     target: crate::cli::IssueTransitionTarget,
+    operation: &'static str,
     transition: Result<crate::domain::Transition, crate::domain::DomainError>,
     output_mode: crate::output::OutputMode,
 ) -> Result<(), crate::error::AppError> {
     let project = project
         .ok_or_else(|| crate::error::AppError::InvalidInput("--project is required".to_owned()))?;
-    let transition = transition?;
     let context = crate::domain::ExecutionContext::resolve()?;
     let issue = app.transition_issue(
         project,
         target.number,
         target.revision,
+        operation,
         transition,
         &context,
     )?;
