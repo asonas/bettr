@@ -26,16 +26,21 @@ impl From<&crate::cli::Cli> for OutputMode {
 pub fn write_error(mode: OutputMode, error: &crate::error::AppError) {
     match mode {
         OutputMode::Human => eprintln!("{}: {error}", error.code()),
-        OutputMode::Json => eprintln!(
-            "{}",
-            serde_json::json!({
+        OutputMode::Json => {
+            let mut error_value = serde_json::json!({
                 "schema_version": 1,
                 "error": {
                     "code": error.code(),
                     "message": error.to_string(),
                 }
-            })
-        ),
+            });
+            if let crate::error::AppError::RevisionConflict { current_revision } = error {
+                error_value["error"]["details"] = serde_json::json!({
+                    "current_revision": current_revision,
+                });
+            }
+            eprintln!("{error_value}");
+        }
     }
 }
 

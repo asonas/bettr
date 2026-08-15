@@ -177,6 +177,87 @@ impl Database {
             })
     }
 
+    pub fn transition_issue(
+        &mut self,
+        issue: &crate::domain::Issue,
+        expected_revision: i64,
+        transition: &crate::domain::Transition,
+        target_state: crate::domain::IssueState,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(Self::database_error)?;
+        let updated_at = chrono::Utc::now();
+        let changed = transaction
+            .execute(
+                "UPDATE issues
+                 SET state = ?1, updated_at = ?2, revision = revision + 1
+                 WHERE id = ?3 AND revision = ?4",
+                rusqlite::params![
+                    target_state.as_str(),
+                    updated_at.to_rfc3339(),
+                    issue.id.to_string(),
+                    expected_revision,
+                ],
+            )
+            .map_err(Self::database_error)?;
+        if changed == 0 {
+            let current_revision = transaction
+                .query_row(
+                    "SELECT revision FROM issues WHERE id = ?1",
+                    [issue.id.to_string()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => {
+                        crate::error::AppError::NotFound("issue not found".to_owned())
+                    }
+                    error => Self::database_error(error),
+                })?;
+            return Err(crate::error::AppError::RevisionConflict { current_revision });
+        }
+
+        let mut updated_issue = issue.clone();
+        updated_issue.state = target_state;
+        updated_issue.revision = expected_revision + 1;
+        updated_issue.updated_at = updated_at;
+        transaction
+            .execute(
+                "INSERT INTO domain_events (
+                    id, sequence, project_id, issue_id, event_type, metadata_json, created_at
+                 ) VALUES (
+                    ?1, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM domain_events),
+                    ?2, ?3, ?4, ?5, ?6
+                 )",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    updated_issue.project_id.to_string(),
+                    updated_issue.id.to_string(),
+                    transition.event_type(),
+                    transition
+                        .event_metadata(issue.state, target_state, updated_issue.revision)
+                        .to_string(),
+                    updated_at.to_rfc3339(),
+                ],
+            )
+            .map_err(Self::database_error)?;
+        let issue_id = updated_issue.id.to_string();
+        let audit_metadata = serde_json::json!({ "revision": updated_issue.revision }).to_string();
+        Self::insert_audit_event(
+            &transaction,
+            transition.operation(),
+            true,
+            context,
+            Some(("issue", &issue_id)),
+            &audit_metadata,
+        )?;
+        transaction.commit().map_err(Self::database_error)?;
+
+        Ok(updated_issue)
+    }
+
     pub fn list_issues(
         &self,
         filter: &crate::domain::IssueFilter,

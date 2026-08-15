@@ -121,6 +121,57 @@ impl App {
         }
     }
 
+    pub fn transition_issue(
+        &mut self,
+        project: &str,
+        number: i64,
+        expected_revision: i64,
+        transition: crate::domain::Transition,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        let operation = transition.operation();
+        let result = (|| {
+            if number < 1 {
+                return Err(crate::error::AppError::InvalidInput(
+                    "issue number must be positive".to_owned(),
+                ));
+            }
+            if expected_revision < 1 {
+                return Err(crate::error::AppError::InvalidInput(
+                    "issue revision must be positive".to_owned(),
+                ));
+            }
+
+            let issue = self.database.show_issue(project, number)?;
+            if issue.revision != expected_revision {
+                return Err(crate::error::AppError::RevisionConflict {
+                    current_revision: issue.revision,
+                });
+            }
+            let target_state = issue.state.apply(&transition)?;
+            self.database.transition_issue(
+                &issue,
+                expected_revision,
+                &transition,
+                target_state,
+                context,
+            )
+        })();
+
+        match result {
+            Ok(issue) => Ok(issue),
+            Err(error) => {
+                if let Err(audit_error) = self
+                    .database
+                    .record_failed_operation(operation, context, &error)
+                {
+                    return Err(Self::failure_audit_error(operation, &error, &audit_error));
+                }
+                Err(error)
+            }
+        }
+    }
+
     pub fn list_issues(
         &mut self,
         filter: &crate::domain::IssueFilter,

@@ -53,6 +53,12 @@ pub enum IssueSubcommand {
     Create(IssueCreateCommand),
     Show(IssueShowCommand),
     List(IssueListCommand),
+    Start(IssueStartCommand),
+    Block(IssueBlockCommand),
+    Resume(IssueResumeCommand),
+    Complete(IssueCompleteCommand),
+    Cancel(IssueCancelCommand),
+    Reopen(IssueReopenCommand),
 }
 
 #[derive(clap::Args, Debug)]
@@ -94,6 +100,68 @@ pub struct IssueListCommand {
 
     #[arg(long)]
     pub include_completed: bool,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueTransitionTarget {
+    pub number: i64,
+
+    #[arg(long)]
+    pub revision: i64,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueStartCommand {
+    #[command(flatten)]
+    pub target: IssueTransitionTarget,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueBlockCommand {
+    #[command(flatten)]
+    pub target: IssueTransitionTarget,
+
+    #[arg(long)]
+    pub reason: String,
+
+    #[arg(long, value_enum)]
+    pub wait_kind: crate::domain::WaitKind,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueResumeCommand {
+    #[command(flatten)]
+    pub target: IssueTransitionTarget,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueCompleteCommand {
+    #[command(flatten)]
+    pub target: IssueTransitionTarget,
+
+    #[arg(long)]
+    pub summary: String,
+
+    #[arg(long)]
+    pub verification: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueCancelCommand {
+    #[command(flatten)]
+    pub target: IssueTransitionTarget,
+
+    #[arg(long)]
+    pub reason: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueReopenCommand {
+    #[command(flatten)]
+    pub target: IssueTransitionTarget,
+
+    #[arg(long)]
+    pub reason: String,
 }
 
 #[derive(clap::Args, Debug)]

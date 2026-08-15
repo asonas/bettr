@@ -160,6 +160,48 @@ fn run(
                         crate::output::OutputMode::Json => crate::output::write_success(issues),
                     }
                 }
+                crate::cli::IssueSubcommand::Start(command) => run_issue_transition(
+                    &mut app,
+                    cli.project.as_deref(),
+                    command.target,
+                    Ok(crate::domain::Transition::Start),
+                    output_mode,
+                )?,
+                crate::cli::IssueSubcommand::Block(command) => run_issue_transition(
+                    &mut app,
+                    cli.project.as_deref(),
+                    command.target,
+                    crate::domain::Transition::block(command.reason, command.wait_kind),
+                    output_mode,
+                )?,
+                crate::cli::IssueSubcommand::Resume(command) => run_issue_transition(
+                    &mut app,
+                    cli.project.as_deref(),
+                    command.target,
+                    Ok(crate::domain::Transition::Resume),
+                    output_mode,
+                )?,
+                crate::cli::IssueSubcommand::Complete(command) => run_issue_transition(
+                    &mut app,
+                    cli.project.as_deref(),
+                    command.target,
+                    crate::domain::Transition::complete(command.summary, command.verification),
+                    output_mode,
+                )?,
+                crate::cli::IssueSubcommand::Cancel(command) => run_issue_transition(
+                    &mut app,
+                    cli.project.as_deref(),
+                    command.target,
+                    crate::domain::Transition::cancel(command.reason),
+                    output_mode,
+                )?,
+                crate::cli::IssueSubcommand::Reopen(command) => run_issue_transition(
+                    &mut app,
+                    cli.project.as_deref(),
+                    command.target,
+                    crate::domain::Transition::reopen(command.reason),
+                    output_mode,
+                )?,
             }
             Ok(())
         }
@@ -174,4 +216,29 @@ fn run(
             Ok(())
         }
     }
+}
+
+fn run_issue_transition(
+    app: &mut crate::app::App,
+    project: Option<&str>,
+    target: crate::cli::IssueTransitionTarget,
+    transition: Result<crate::domain::Transition, crate::domain::DomainError>,
+    output_mode: crate::output::OutputMode,
+) -> Result<(), crate::error::AppError> {
+    let project = project
+        .ok_or_else(|| crate::error::AppError::InvalidInput("--project is required".to_owned()))?;
+    let transition = transition?;
+    let context = crate::domain::ExecutionContext::resolve()?;
+    let issue = app.transition_issue(
+        project,
+        target.number,
+        target.revision,
+        transition,
+        &context,
+    )?;
+    match output_mode {
+        crate::output::OutputMode::Human => crate::output::write_issue_human(project, &issue),
+        crate::output::OutputMode::Json => crate::output::write_success(issue),
+    }
+    Ok(())
 }
