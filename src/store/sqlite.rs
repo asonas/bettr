@@ -23,15 +23,13 @@ impl Database {
         let mut database = match database {
             Ok(database) => database,
             Err(error) => {
-                let _ = std::fs::remove_file(path);
-                return Err(error);
+                return Err(Self::cleanup_after_initialization_failure(path, error));
             }
         };
 
         if let Err(error) = database.initialize_schema() {
             drop(database);
-            let _ = std::fs::remove_file(path);
-            return Err(error);
+            return Err(Self::cleanup_after_initialization_failure(path, error));
         }
 
         Ok(database)
@@ -126,5 +124,36 @@ impl Database {
         }
 
         crate::error::AppError::Internal(error.to_string())
+    }
+
+    fn cleanup_after_initialization_failure(
+        path: &std::path::Path,
+        initialization_error: crate::error::AppError,
+    ) -> crate::error::AppError {
+        match std::fs::remove_file(path) {
+            Ok(()) => initialization_error,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => initialization_error,
+            Err(error) => crate::error::AppError::Internal(format!(
+                "failed to remove newly created database after initialization failure ({initialization_error}): {error}"
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cleanup_failure_is_returned_to_the_caller() {
+        let directory = tempfile::tempdir().unwrap();
+        let error = super::Database::cleanup_after_initialization_failure(
+            directory.path(),
+            crate::error::AppError::Internal("schema application failed".to_owned()),
+        );
+
+        assert!(matches!(
+            error,
+            crate::error::AppError::Internal(message)
+                if message.contains("failed to remove newly created database")
+        ));
     }
 }
