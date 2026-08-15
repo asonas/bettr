@@ -152,24 +152,21 @@ impl Database {
         operation: &str,
         context: &crate::domain::ExecutionContext,
         error: &crate::error::AppError,
-    ) {
-        let result = (|| {
-            let transaction = self
-                .connection
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-                .map_err(Self::database_error)?;
-            let metadata_json = serde_json::json!({ "error_code": error.code() }).to_string();
-            Self::insert_audit_event(
-                &transaction,
-                operation,
-                false,
-                context,
-                None,
-                &metadata_json,
-            )?;
-            transaction.commit().map_err(Self::database_error)
-        })();
-        let _ = result;
+    ) -> Result<(), crate::error::AppError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(Self::database_error)?;
+        let metadata_json = serde_json::json!({ "error_code": error.code() }).to_string();
+        Self::insert_audit_event(
+            &transaction,
+            operation,
+            false,
+            context,
+            None,
+            &metadata_json,
+        )?;
+        transaction.commit().map_err(Self::database_error)
     }
 
     fn insert_audit_event(

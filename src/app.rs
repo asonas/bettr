@@ -17,8 +17,16 @@ impl App {
         {
             Ok(project) => Ok(project),
             Err(error) => {
-                self.database
-                    .record_failed_operation("project_create", context, &error);
+                if let Err(audit_error) =
+                    self.database
+                        .record_failed_operation("project_create", context, &error)
+                {
+                    return Err(Self::failure_audit_error(
+                        "project_create",
+                        &error,
+                        &audit_error,
+                    ));
+                }
                 Err(error)
             }
         }
@@ -33,10 +41,30 @@ impl App {
                 Ok(projects)
             }
             Err(error) => {
-                self.database
-                    .record_failed_operation("project_list", &context, &error);
+                if let Err(audit_error) =
+                    self.database
+                        .record_failed_operation("project_list", &context, &error)
+                {
+                    return Err(Self::failure_audit_error(
+                        "project_list",
+                        &error,
+                        &audit_error,
+                    ));
+                }
                 Err(error)
             }
         }
+    }
+
+    fn failure_audit_error(
+        operation: &str,
+        original_error: &crate::error::AppError,
+        audit_error: &crate::error::AppError,
+    ) -> crate::error::AppError {
+        crate::error::AppError::Internal(format!(
+            "failed to persist failure audit for {operation} after {} ({})",
+            original_error.code(),
+            audit_error.code()
+        ))
     }
 }
