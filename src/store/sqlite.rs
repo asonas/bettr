@@ -103,7 +103,7 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
 
         match transaction.execute(
             "INSERT INTO projects (id, name, archived, created_at) VALUES (?1, ?2, ?3, ?4)",
@@ -116,11 +116,11 @@ impl Database {
         ) {
             Ok(_) => {}
             Err(rusqlite::Error::SqliteFailure(code, _))
-                if code.code == rusqlite::ErrorCode::ConstraintViolation =>
+                if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
             {
                 return Err(crate::error::AppError::ProjectNameConflict);
             }
-            Err(error) => return Err(Self::database_error(error)),
+            Err(error) => return Err(crate::error::AppError::from(error)),
         }
 
         let metadata_json =
@@ -137,7 +137,7 @@ impl Database {
                     project.created_at.to_rfc3339(),
                 ],
             )
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let project_id = project.id.to_string();
         Self::insert_audit_event(
             &transaction,
@@ -153,7 +153,7 @@ impl Database {
                 metadata_json: "{}",
             },
         )?;
-        transaction.commit().map_err(Self::database_error)?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
 
         Ok(project)
     }
@@ -162,17 +162,17 @@ impl Database {
         let mut statement = self
             .connection
             .prepare("SELECT id, name, archived, created_at FROM projects ORDER BY name ASC")
-            .map_err(Self::database_error)?;
-        let mut rows = statement.query([]).map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
+        let mut rows = statement.query([]).map_err(crate::error::AppError::from)?;
         let mut projects = Vec::new();
-        while let Some(row) = rows.next().map_err(Self::database_error)? {
-            let id: String = row.get(0).map_err(Self::database_error)?;
-            let created_at: String = row.get(3).map_err(Self::database_error)?;
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
+            let id: String = row.get(0).map_err(crate::error::AppError::from)?;
+            let created_at: String = row.get(3).map_err(crate::error::AppError::from)?;
             projects.push(crate::domain::Project {
                 id: uuid::Uuid::parse_str(&id)
                     .map_err(|error| crate::error::AppError::Internal(error.to_string()))?,
-                name: row.get(1).map_err(Self::database_error)?,
-                archived: row.get::<_, i64>(2).map_err(Self::database_error)? != 0,
+                name: row.get(1).map_err(crate::error::AppError::from)?,
+                archived: row.get::<_, i64>(2).map_err(crate::error::AppError::from)? != 0,
                 created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
                     .map_err(|error| crate::error::AppError::Internal(error.to_string()))?
                     .with_timezone(&chrono::Utc),
@@ -187,15 +187,7 @@ impl Database {
         input: &crate::domain::NewIssue,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::Issue, crate::error::AppError> {
-        for attempt in 0..3 {
-            match self.create_issue_once(project_name, input, context) {
-                Err(crate::error::AppError::DatabaseBusy(_)) if attempt < 2 => {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
-                result => return result,
-            }
-        }
-        unreachable!("the retry loop always returns")
+        self.create_issue_once(project_name, input, context)
     }
 
     pub fn show_issue(&self, project_name: &str, number: i64) -> IssueLookup {
@@ -221,7 +213,7 @@ impl Database {
             Ok(statement) => statement,
             Err(error) => {
                 return IssueLookup {
-                    result: Err(Self::database_error(error)),
+                    result: Err(crate::error::AppError::from(error)),
                     subject,
                 };
             }
@@ -235,7 +227,7 @@ impl Database {
                 rusqlite::Error::QueryReturnedNoRows => {
                     crate::error::AppError::NotFound("issue not found".to_owned())
                 }
-                error => Self::database_error(error),
+                error => crate::error::AppError::from(error),
             });
         if let Ok(issue) = &result {
             subject.target = Some(("issue".to_owned(), issue.id.to_string()));
@@ -255,7 +247,7 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let updated_at = chrono::Utc::now();
         let changed = transaction
             .execute(
@@ -269,7 +261,7 @@ impl Database {
                     expected_revision,
                 ],
             )
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         if changed == 0 {
             let current_revision = transaction
                 .query_row(
@@ -281,7 +273,7 @@ impl Database {
                     rusqlite::Error::QueryReturnedNoRows => {
                         crate::error::AppError::NotFound("issue not found".to_owned())
                     }
-                    error => Self::database_error(error),
+                    error => crate::error::AppError::from(error),
                 })?;
             return Err(crate::error::AppError::RevisionConflict { current_revision });
         }
@@ -311,7 +303,7 @@ impl Database {
                     updated_at.to_rfc3339(),
                 ],
             )
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let issue_id = updated_issue.id.to_string();
         let project_name =
             Self::project_name_in_transaction(&transaction, updated_issue.project_id)?;
@@ -330,7 +322,7 @@ impl Database {
                 metadata_json: &audit_metadata,
             },
         )?;
-        transaction.commit().map_err(Self::database_error)?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
 
         Ok(updated_issue)
     }
@@ -345,7 +337,7 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let updated_at = chrono::Utc::now();
         let mut updated_issue = issue.clone();
         patch.apply_to(&mut updated_issue);
@@ -370,7 +362,7 @@ impl Database {
                     expected_revision,
                 ],
             )
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         if changed == 0 {
             let current_revision = transaction
                 .query_row(
@@ -382,7 +374,7 @@ impl Database {
                     rusqlite::Error::QueryReturnedNoRows => {
                         crate::error::AppError::NotFound("issue not found".to_owned())
                     }
-                    error => Self::database_error(error),
+                    error => crate::error::AppError::from(error),
                 })?;
             return Err(crate::error::AppError::RevisionConflict { current_revision });
         }
@@ -405,7 +397,7 @@ impl Database {
                     updated_at.to_rfc3339(),
                 ],
             )
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let issue_id = updated_issue.id.to_string();
         let project_name =
             Self::project_name_in_transaction(&transaction, updated_issue.project_id)?;
@@ -424,7 +416,7 @@ impl Database {
                 metadata_json: &audit_metadata,
             },
         )?;
-        transaction.commit().map_err(Self::database_error)?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
 
         Ok(updated_issue)
     }
@@ -438,7 +430,7 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let comment = crate::domain::Comment {
             id: uuid::Uuid::new_v4(),
             issue_id: issue.id,
@@ -461,7 +453,7 @@ impl Database {
                     serde_json::json!({ "session_id": context.session_id }).to_string(),
                 ],
             )
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         transaction
             .execute(
                 "UPDATE issues SET updated_at = ?1 WHERE id = ?2",
@@ -470,7 +462,7 @@ impl Database {
                     comment.issue_id.to_string()
                 ],
             )
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let event_metadata = Self::event_metadata(
             serde_json::json!({ "comment_id": comment.id, "body": comment.body }),
             context,
@@ -491,7 +483,7 @@ impl Database {
                     comment.created_at.to_rfc3339(),
                 ],
             )
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let issue_id = issue.id.to_string();
         let project_name = Self::project_name_in_transaction(&transaction, issue.project_id)?;
         let audit_metadata = serde_json::json!({
@@ -513,7 +505,7 @@ impl Database {
                 metadata_json: &audit_metadata,
             },
         )?;
-        transaction.commit().map_err(Self::database_error)?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
 
         Ok(comment)
     }
@@ -528,13 +520,13 @@ impl Database {
                 "SELECT sequence, event_type, metadata_json, created_at
                  FROM domain_events WHERE issue_id = ?1 ORDER BY sequence ASC",
             )
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let mut rows = statement
             .query([issue_id.to_string()])
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let mut events = Vec::new();
-        while let Some(row) = rows.next().map_err(Self::database_error)? {
-            let metadata_json: String = row.get(2).map_err(Self::database_error)?;
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
+            let metadata_json: String = row.get(2).map_err(crate::error::AppError::from)?;
             let mut metadata: serde_json::Value = serde_json::from_str(&metadata_json)
                 .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
             let context = metadata
@@ -548,10 +540,10 @@ impl Database {
             let context = serde_json::from_value(context)
                 .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
             let revision = metadata.get("revision").and_then(serde_json::Value::as_i64);
-            let created_at: String = row.get(3).map_err(Self::database_error)?;
+            let created_at: String = row.get(3).map_err(crate::error::AppError::from)?;
             events.push(crate::domain::DomainEvent {
-                sequence: row.get(0).map_err(Self::database_error)?,
-                event_type: row.get(1).map_err(Self::database_error)?,
+                sequence: row.get(0).map_err(crate::error::AppError::from)?,
+                event_type: row.get(1).map_err(crate::error::AppError::from)?,
                 revision,
                 created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
                     .map_err(|error| crate::error::AppError::Internal(error.to_string()))?
@@ -634,15 +626,15 @@ impl Database {
         let mut statement = self
             .connection
             .prepare(&sql)
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let mut rows = statement
             .query(rusqlite::params_from_iter(parameters.iter()))
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let mut issues = Vec::new();
-        while let Some(row) = rows.next().map_err(Self::database_error)? {
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
             issues.push(crate::domain::IssueListItem {
-                project: row.get(0).map_err(Self::database_error)?,
-                issue: Self::issue_from_row_at(row, 1).map_err(Self::database_error)?,
+                project: row.get(0).map_err(crate::error::AppError::from)?,
+                issue: Self::issue_from_row_at(row, 1).map_err(crate::error::AppError::from)?,
             });
         }
         Ok(issues)
@@ -698,12 +690,12 @@ impl Database {
         let mut statement = self
             .connection
             .prepare(&sql)
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let mut rows = statement
             .query(rusqlite::params_from_iter(parameters.iter()))
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let mut events = Vec::new();
-        while let Some(row) = rows.next().map_err(Self::database_error)? {
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
             events.push(Self::audit_event_from_row(row)?);
         }
         Ok(events)
@@ -721,7 +713,7 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         Self::insert_audit_event(
             &transaction,
             AuditInsert {
@@ -736,7 +728,7 @@ impl Database {
                 metadata_json: "{}",
             },
         )?;
-        transaction.commit().map_err(Self::database_error)
+        transaction.commit().map_err(crate::error::AppError::from)
     }
 
     pub fn record_failed_operation(
@@ -747,10 +739,16 @@ impl Database {
         subject: &AuditSubject,
         started_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), crate::error::AppError> {
+        // A failure audit uses the same writer lock, so it cannot be persisted while
+        // the original operation is reporting that lock as busy. Preserve the
+        // actionable busy error instead of waiting again and replacing it.
+        if matches!(error, crate::error::AppError::DatabaseBusy(_)) {
+            return Ok(());
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let metadata_json = serde_json::json!({ "error_code": error.code() }).to_string();
         Self::insert_audit_event(
             &transaction,
@@ -777,7 +775,7 @@ impl Database {
                 metadata_json: &metadata_json,
             },
         )?;
-        transaction.commit().map_err(Self::database_error)
+        transaction.commit().map_err(crate::error::AppError::from)
     }
 
     fn insert_audit_event(
@@ -818,7 +816,7 @@ impl Database {
                     event.metadata_json,
                 ],
             )
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         Ok(())
     }
 
@@ -846,10 +844,10 @@ impl Database {
                 .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
                 .map_err(|error| crate::error::AppError::Internal(error.to_string()))
         };
-        let operation: String = row.get(3).map_err(Self::database_error)?;
-        let initiator_kind: Option<String> = row.get(6).map_err(Self::database_error)?;
-        let initiator_name: Option<String> = row.get(7).map_err(Self::database_error)?;
-        let session_id: Option<String> = row.get(8).map_err(Self::database_error)?;
+        let operation: String = row.get(3).map_err(crate::error::AppError::from)?;
+        let initiator_kind: Option<String> = row.get(6).map_err(crate::error::AppError::from)?;
+        let initiator_name: Option<String> = row.get(7).map_err(crate::error::AppError::from)?;
+        let session_id: Option<String> = row.get(8).map_err(crate::error::AppError::from)?;
         let context = match initiator_kind.as_deref().unwrap_or("system") {
             "agent" => crate::domain::ExecutionContext {
                 kind: crate::domain::InitiatorKind::Agent,
@@ -875,8 +873,8 @@ impl Database {
                 )));
             }
         };
-        let project_id: Option<String> = row.get(9).map_err(Self::database_error)?;
-        let project_name: Option<String> = row.get(10).map_err(Self::database_error)?;
+        let project_id: Option<String> = row.get(9).map_err(crate::error::AppError::from)?;
+        let project_name: Option<String> = row.get(10).map_err(crate::error::AppError::from)?;
         let project = if Self::operation_allows_project(&operation) {
             match project_id.zip(project_name) {
                 Some((id, name)) => Some(crate::app::AuditProject {
@@ -888,8 +886,8 @@ impl Database {
         } else {
             None
         };
-        let target_type: Option<String> = row.get(11).map_err(Self::database_error)?;
-        let target_id: Option<String> = row.get(12).map_err(Self::database_error)?;
+        let target_type: Option<String> = row.get(11).map_err(crate::error::AppError::from)?;
+        let target_id: Option<String> = row.get(12).map_err(crate::error::AppError::from)?;
         let target_parts = Self::allowed_target_kind(&operation).and_then(|allowed_kind| {
             target_type
                 .zip(target_id)
@@ -903,19 +901,19 @@ impl Database {
             None => None,
         };
         let revision = if Self::operation_allows_revision(&operation) {
-            row.get(13).map_err(Self::database_error)?
+            row.get(13).map_err(crate::error::AppError::from)?
         } else {
             None
         };
-        let success: i64 = row.get(4).map_err(Self::database_error)?;
-        let exit_code: i64 = row.get(5).map_err(Self::database_error)?;
+        let success: i64 = row.get(4).map_err(crate::error::AppError::from)?;
+        let exit_code: i64 = row.get(5).map_err(crate::error::AppError::from)?;
         let exit_code = u8::try_from(exit_code).map_err(|error| {
             crate::error::AppError::Internal(format!("invalid audit exit code: {error}"))
         })?;
         Ok(crate::app::AuditEvent {
-            id: parse_uuid(row.get(0).map_err(Self::database_error)?)?,
-            started_at: parse_timestamp(row.get(1).map_err(Self::database_error)?)?,
-            finished_at: parse_timestamp(row.get(2).map_err(Self::database_error)?)?,
+            id: parse_uuid(row.get(0).map_err(crate::error::AppError::from)?)?,
+            started_at: parse_timestamp(row.get(1).map_err(crate::error::AppError::from)?)?,
+            finished_at: parse_timestamp(row.get(2).map_err(crate::error::AppError::from)?)?,
             operation,
             project,
             target,
@@ -981,7 +979,7 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let project_id = Self::project_id_in_transaction(&transaction, project_name)?;
         let number = transaction
             .query_row(
@@ -989,7 +987,7 @@ impl Database {
                 [project_id.to_string()],
                 |row| row.get::<_, i64>(0),
             )
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let now = chrono::Utc::now();
         let issue = crate::domain::Issue {
             id: uuid::Uuid::new_v4(),
@@ -1026,7 +1024,7 @@ impl Database {
                     issue.updated_at.to_rfc3339(),
                 ],
             )
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let event_metadata = Self::event_metadata(
             serde_json::json!({ "number": issue.number, "revision": issue.revision }),
             context,
@@ -1044,7 +1042,7 @@ impl Database {
                     issue.created_at.to_rfc3339(),
                 ],
             )
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let issue_id = issue.id.to_string();
         Self::insert_audit_event(
             &transaction,
@@ -1060,7 +1058,7 @@ impl Database {
                 metadata_json: "{}",
             },
         )?;
-        transaction.commit().map_err(Self::database_error)?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
         Ok(issue)
     }
 
@@ -1076,7 +1074,7 @@ impl Database {
                 rusqlite::Error::QueryReturnedNoRows => {
                     crate::error::AppError::NotFound("project not found".to_owned())
                 }
-                error => Self::database_error(error),
+                error => crate::error::AppError::from(error),
             })?;
         uuid::Uuid::parse_str(&id)
             .map_err(|error| crate::error::AppError::Internal(error.to_string()))
@@ -1096,7 +1094,7 @@ impl Database {
                 rusqlite::Error::QueryReturnedNoRows => {
                     crate::error::AppError::NotFound("project not found".to_owned())
                 }
-                error => Self::database_error(error),
+                error => crate::error::AppError::from(error),
             })?;
         uuid::Uuid::parse_str(&id)
             .map_err(|error| crate::error::AppError::Internal(error.to_string()))
@@ -1116,7 +1114,7 @@ impl Database {
                 rusqlite::Error::QueryReturnedNoRows => {
                     crate::error::AppError::NotFound("project not found".to_owned())
                 }
-                error => Self::database_error(error),
+                error => crate::error::AppError::from(error),
             })
     }
 
@@ -1233,13 +1231,13 @@ impl Database {
             path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
         )
-        .map_err(Self::database_error)?;
+        .map_err(crate::error::AppError::from)?;
         connection
             .busy_timeout(std::time::Duration::from_secs(5))
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         connection
             .execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
 
         Ok(Self { connection })
     }
@@ -1247,13 +1245,13 @@ impl Database {
     fn is_initialized_database(path: &std::path::Path) -> Result<bool, crate::error::AppError> {
         let connection =
             rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-                .map_err(Self::database_error)?;
+                .map_err(crate::error::AppError::from)?;
         let version = connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         let application_id = connection
             .pragma_query_value(None, "application_id", |row| row.get::<_, i64>(0))
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
 
         Ok(version == 1 && application_id == BETTR_APPLICATION_ID)
     }
@@ -1266,10 +1264,10 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         transaction
             .execute_batch(include_str!("schema.sql"))
-            .map_err(Self::database_error)?;
+            .map_err(crate::error::AppError::from)?;
         Self::insert_audit_event(
             &transaction,
             AuditInsert {
@@ -1284,20 +1282,7 @@ impl Database {
                 metadata_json: "{}",
             },
         )?;
-        transaction.commit().map_err(Self::database_error)
-    }
-
-    fn database_error(error: rusqlite::Error) -> crate::error::AppError {
-        if let rusqlite::Error::SqliteFailure(code, _) = &error
-            && matches!(
-                code.code,
-                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
-            )
-        {
-            return crate::error::AppError::DatabaseBusy(error.to_string());
-        }
-
-        crate::error::AppError::Internal(error.to_string())
+        transaction.commit().map_err(crate::error::AppError::from)
     }
 
     fn cleanup_after_initialization_failure(

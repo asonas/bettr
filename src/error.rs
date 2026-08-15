@@ -89,3 +89,55 @@ impl From<crate::domain::DomainError> for AppError {
         }
     }
 }
+
+impl From<rusqlite::Error> for AppError {
+    fn from(error: rusqlite::Error) -> Self {
+        match error {
+            rusqlite::Error::SqliteFailure(code, _)
+                if matches!(
+                    code.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ) =>
+            {
+                Self::DatabaseBusy("database is busy".to_owned())
+            }
+            rusqlite::Error::SqliteFailure(code, _) => Self::Internal(format!(
+                "database operation failed (SQLite error code {})",
+                code.extended_code
+            )),
+            _ => Self::Internal("database operation failed".to_owned()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn sqlite_failure(code: i32, message: &str) -> rusqlite::Error {
+        rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), Some(message.to_owned()))
+    }
+
+    #[test]
+    fn sqlite_busy_variants_and_locked_map_to_database_busy() {
+        for code in [
+            rusqlite::ffi::SQLITE_BUSY,
+            rusqlite::ffi::SQLITE_BUSY_SNAPSHOT,
+            rusqlite::ffi::SQLITE_LOCKED,
+        ] {
+            let error = super::AppError::from(sqlite_failure(code, "private SQLite detail"));
+            assert!(matches!(error, super::AppError::DatabaseBusy(_)));
+            assert!(!error.to_string().contains("private SQLite detail"));
+        }
+    }
+
+    #[test]
+    fn other_sqlite_errors_have_safe_internal_diagnostics() {
+        let error = super::AppError::from(sqlite_failure(
+            rusqlite::ffi::SQLITE_CORRUPT,
+            "secret database detail leaked by SQLite",
+        ));
+
+        assert!(matches!(error, super::AppError::Internal(_)));
+        assert!(!error.to_string().contains("secret database detail"));
+        assert!(error.to_string().contains("SQLite error code 11"));
+    }
+}
