@@ -20,6 +20,8 @@ pub enum Command {
     Project(ProjectCommand),
     Issue(IssueCommand),
     Status(StatusCommand),
+    Audit(AuditCommand),
+    Context(ContextCommand),
 }
 
 #[derive(clap::Args, Debug)]
@@ -243,6 +245,47 @@ pub struct IssueReopenCommand {
 
 #[derive(clap::Args, Debug)]
 pub struct StatusCommand {}
+
+#[derive(clap::Args, Debug)]
+pub struct AuditCommand {
+    #[command(subcommand)]
+    pub command: AuditSubcommand,
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum AuditSubcommand {
+    List(AuditListCommand),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AuditListCommand {
+    #[arg(long)]
+    pub project_id: Option<uuid::Uuid>,
+
+    #[arg(long)]
+    pub operation: Option<String>,
+
+    #[arg(long)]
+    pub outcome: Option<String>,
+
+    #[arg(long)]
+    pub kind: Option<String>,
+
+    #[arg(long)]
+    pub agent: Option<String>,
+
+    #[arg(long)]
+    pub session_id: Option<String>,
+
+    #[arg(long, value_parser = parse_timestamp)]
+    pub after: Option<chrono::DateTime<chrono::Utc>>,
+
+    #[arg(long, value_parser = parse_timestamp)]
+    pub before: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ContextCommand {}
 
 fn parse_timestamp(value: &str) -> Result<chrono::DateTime<chrono::Utc>, String> {
     value

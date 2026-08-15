@@ -54,14 +54,24 @@ CREATE INDEX domain_events_sequence ON domain_events(sequence);
 CREATE TABLE audit_events (
     id TEXT PRIMARY KEY,
     occurred_at TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL,
     operation TEXT NOT NULL,
     success INTEGER NOT NULL CHECK (success IN (0, 1)),
+    exit_code INTEGER NOT NULL CHECK (exit_code BETWEEN 0 AND 255),
     initiator_kind TEXT,
     initiator_name TEXT,
     session_id TEXT,
+    project_id TEXT,
+    project_name TEXT,
     target_type TEXT,
     target_id TEXT,
+    revision INTEGER,
     metadata_json TEXT NOT NULL DEFAULT '{}'
 );
+
+CREATE INDEX audit_events_project_id ON audit_events(project_id);
+CREATE INDEX audit_events_operation ON audit_events(operation);
+CREATE INDEX audit_events_finished_at ON audit_events(finished_at);
 
 PRAGMA user_version = 1;

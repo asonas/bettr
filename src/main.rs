@@ -45,14 +45,17 @@ fn run(
     cli: crate::cli::Cli,
     output_mode: crate::output::OutputMode,
 ) -> Result<(), crate::error::AppError> {
-    let database_path = cli
-        .database
-        .as_deref()
-        .ok_or_else(|| crate::error::AppError::InvalidInput("--database is required".to_owned()))?;
+    let resolved_context =
+        crate::app::App::resolved_context(cli.project.clone(), cli.database.clone())?;
+    let database_path = resolved_context.database.value.clone();
+    let project = resolved_context.project.value.clone();
 
     match cli.command {
         crate::cli::Command::Init(_) => {
-            let _database = crate::store::Database::initialize(database_path)?;
+            let started_at = chrono::Utc::now();
+            let execution_context = crate::domain::ExecutionContext::resolve()?;
+            let _database =
+                crate::store::Database::initialize(&database_path, &execution_context, started_at)?;
             match output_mode {
                 crate::output::OutputMode::Human => println!("initialized"),
                 crate::output::OutputMode::Json => {
@@ -62,7 +65,7 @@ fn run(
             Ok(())
         }
         crate::cli::Command::Project(project_command) => {
-            let database = crate::store::Database::open(database_path)?;
+            let database = crate::store::Database::open(&database_path)?;
             let mut app = crate::app::App::new(database);
 
             match project_command.command {
@@ -91,12 +94,12 @@ fn run(
             Ok(())
         }
         crate::cli::Command::Issue(issue_command) => {
-            let database = crate::store::Database::open(database_path)?;
+            let database = crate::store::Database::open(&database_path)?;
             let mut app = crate::app::App::new(database);
 
             match issue_command.command {
                 crate::cli::IssueSubcommand::Create(create_command) => {
-                    let project = cli.project.as_deref().ok_or_else(|| {
+                    let project = project.as_deref().ok_or_else(|| {
                         crate::error::AppError::InvalidInput("--project is required".to_owned())
                     })?;
                     let context = crate::domain::ExecutionContext::resolve()?;
@@ -117,7 +120,7 @@ fn run(
                     }
                 }
                 crate::cli::IssueSubcommand::Show(show_command) => {
-                    let project = cli.project.as_deref().ok_or_else(|| {
+                    let project = project.as_deref().ok_or_else(|| {
                         crate::error::AppError::InvalidInput("--project is required".to_owned())
                     })?;
                     let issue = app.show_issue(project, show_command.number)?;
@@ -129,7 +132,7 @@ fn run(
                     }
                 }
                 crate::cli::IssueSubcommand::List(list_command) => {
-                    if list_command.all_projects && cli.project.is_some() {
+                    if list_command.all_projects && project.is_some() {
                         return Err(crate::error::AppError::InvalidInput(
                             "--all-projects cannot be used with --project".to_owned(),
                         ));
@@ -137,7 +140,7 @@ fn run(
                     let projects = if list_command.all_projects {
                         Vec::new()
                     } else {
-                        vec![cli.project.ok_or_else(|| {
+                        vec![project.clone().ok_or_else(|| {
                             crate::error::AppError::InvalidInput(
                                 "--project is required unless --all-projects is used".to_owned(),
                             )
@@ -161,7 +164,7 @@ fn run(
                     }
                 }
                 crate::cli::IssueSubcommand::Edit(command) => {
-                    let project = cli.project.as_deref().ok_or_else(|| {
+                    let project = project.as_deref().ok_or_else(|| {
                         crate::error::AppError::InvalidInput("--project is required".to_owned())
                     })?;
                     let number = command.target.number;
@@ -177,7 +180,7 @@ fn run(
                     }
                 }
                 crate::cli::IssueSubcommand::Comment(command) => {
-                    let project = cli.project.as_deref().ok_or_else(|| {
+                    let project = project.as_deref().ok_or_else(|| {
                         crate::error::AppError::InvalidInput("--project is required".to_owned())
                     })?;
                     let context = crate::domain::ExecutionContext::resolve()?;
@@ -191,7 +194,7 @@ fn run(
                     }
                 }
                 crate::cli::IssueSubcommand::History(command) => {
-                    let project = cli.project.as_deref().ok_or_else(|| {
+                    let project = project.as_deref().ok_or_else(|| {
                         crate::error::AppError::InvalidInput("--project is required".to_owned())
                     })?;
                     let history = app.issue_history(project, command.number)?;
@@ -204,42 +207,42 @@ fn run(
                 }
                 crate::cli::IssueSubcommand::Start(command) => run_issue_transition(
                     &mut app,
-                    cli.project.as_deref(),
+                    project.as_deref(),
                     command.target,
                     Ok(crate::domain::Transition::Start),
                     output_mode,
                 )?,
                 crate::cli::IssueSubcommand::Block(command) => run_issue_transition(
                     &mut app,
-                    cli.project.as_deref(),
+                    project.as_deref(),
                     command.target,
                     crate::domain::Transition::block(command.reason, command.wait_kind),
                     output_mode,
                 )?,
                 crate::cli::IssueSubcommand::Resume(command) => run_issue_transition(
                     &mut app,
-                    cli.project.as_deref(),
+                    project.as_deref(),
                     command.target,
                     Ok(crate::domain::Transition::Resume),
                     output_mode,
                 )?,
                 crate::cli::IssueSubcommand::Complete(command) => run_issue_transition(
                     &mut app,
-                    cli.project.as_deref(),
+                    project.as_deref(),
                     command.target,
                     crate::domain::Transition::complete(command.summary, command.verification),
                     output_mode,
                 )?,
                 crate::cli::IssueSubcommand::Cancel(command) => run_issue_transition(
                     &mut app,
-                    cli.project.as_deref(),
+                    project.as_deref(),
                     command.target,
                     crate::domain::Transition::cancel(command.reason),
                     output_mode,
                 )?,
                 crate::cli::IssueSubcommand::Reopen(command) => run_issue_transition(
                     &mut app,
-                    cli.project.as_deref(),
+                    project.as_deref(),
                     command.target,
                     crate::domain::Transition::reopen(command.reason),
                     output_mode,
@@ -248,12 +251,52 @@ fn run(
             Ok(())
         }
         crate::cli::Command::Status(_) => {
-            let database = crate::store::Database::open(database_path)?;
+            let database = crate::store::Database::open(&database_path)?;
             let mut app = crate::app::App::new(database);
             let status = app.status()?;
             match output_mode {
                 crate::output::OutputMode::Human => crate::output::write_status_human(&status),
                 crate::output::OutputMode::Json => crate::output::write_success(status),
+            }
+            Ok(())
+        }
+        crate::cli::Command::Audit(audit_command) => {
+            let database = crate::store::Database::open(&database_path)?;
+            let mut app = crate::app::App::new(database);
+            match audit_command.command {
+                crate::cli::AuditSubcommand::List(command) => {
+                    let events = app.list_audit_events(&crate::app::AuditFilter {
+                        project_id: command.project_id,
+                        operation: command.operation,
+                        outcome: command.outcome,
+                        kind: command.kind,
+                        agent: command.agent,
+                        session_id: command.session_id,
+                        after: command.after,
+                        before: command.before,
+                    })?;
+                    match output_mode {
+                        crate::output::OutputMode::Human => {
+                            crate::output::write_audit_events_human(&events)
+                        }
+                        crate::output::OutputMode::Json => crate::output::write_success(events),
+                    }
+                }
+            }
+            Ok(())
+        }
+        crate::cli::Command::Context(_) => {
+            if database_path.is_file()
+                && let Ok(database) = crate::store::Database::open(&database_path)
+            {
+                let mut app = crate::app::App::new(database);
+                app.record_context_inspection()?;
+            }
+            match output_mode {
+                crate::output::OutputMode::Human => {
+                    crate::output::write_context_human(&resolved_context)
+                }
+                crate::output::OutputMode::Json => crate::output::write_success(resolved_context),
             }
             Ok(())
         }

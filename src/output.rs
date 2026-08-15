@@ -114,6 +114,40 @@ pub fn write_status_human(status: &crate::domain::Status) {
     write_status_section("active", &status.active);
 }
 
+pub fn write_audit_events_human(events: &[crate::app::AuditEvent]) {
+    for event in events {
+        let target = event.target.as_ref().map_or_else(
+            || "-".to_owned(),
+            |target| format!("{}:{}", target.kind, target.id),
+        );
+        println!(
+            "{} {} {} {} {}",
+            event.finished_at.to_rfc3339(),
+            escape_terminal_controls(&event.operation),
+            event.outcome,
+            event.exit_code,
+            target
+        );
+    }
+}
+
+pub fn write_context_human(context: &crate::app::ResolvedContext) {
+    println!(
+        "project: {} ({})",
+        context
+            .project
+            .value
+            .as_deref()
+            .map_or_else(|| "none".to_owned(), escape_terminal_controls),
+        context.project.source.as_str()
+    );
+    println!(
+        "database: {} ({})",
+        escape_terminal_controls(&context.database.value.to_string_lossy()),
+        context.database.source.as_str()
+    );
+}
+
 fn write_status_section(name: &str, issues: &[crate::domain::IssueListItem]) {
     if issues.is_empty() {
         return;
