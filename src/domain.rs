@@ -93,6 +93,7 @@ pub struct Project {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
+#[value(rename_all = "snake_case")]
 pub enum IssueState {
     Todo,
     InProgress,
