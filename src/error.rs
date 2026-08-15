@@ -14,6 +14,7 @@ pub enum AppError {
     InvalidInput(String),
     NotFound(String),
     Conflict(String),
+    ProjectNameConflict,
     DatabaseBusy(String),
     Internal(String),
     DatabaseAlreadyInitialized,
@@ -26,6 +27,7 @@ impl AppError {
             Self::InvalidInput(_) => ExitCode::InvalidInput,
             Self::NotFound(_) => ExitCode::NotFound,
             Self::Conflict(_) => ExitCode::Conflict,
+            Self::ProjectNameConflict => ExitCode::Conflict,
             Self::DatabaseBusy(_) => ExitCode::DatabaseBusy,
             Self::Internal(_) => ExitCode::Internal,
             Self::DatabaseAlreadyInitialized => ExitCode::InvalidInput,
@@ -38,6 +40,7 @@ impl AppError {
             Self::InvalidInput(_) => "invalid_input",
             Self::NotFound(_) => "not_found",
             Self::Conflict(_) => "conflict",
+            Self::ProjectNameConflict => "project_name_conflict",
             Self::DatabaseBusy(_) => "database_busy",
             Self::Internal(_) => "internal_error",
             Self::DatabaseAlreadyInitialized => "database_already_initialized",
@@ -54,6 +57,7 @@ impl std::fmt::Display for AppError {
             | Self::Conflict(message)
             | Self::DatabaseBusy(message)
             | Self::Internal(message) => formatter.write_str(message),
+            Self::ProjectNameConflict => formatter.write_str("project name already exists"),
             Self::DatabaseAlreadyInitialized => {
                 formatter.write_str("database is already initialized")
             }

@@ -48,6 +48,162 @@ impl Database {
         &self.connection
     }
 
+    pub fn create_project(
+        &mut self,
+        name: &str,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::Project, crate::error::AppError> {
+        let project = crate::domain::Project {
+            id: uuid::Uuid::new_v4(),
+            name: name.to_owned(),
+            archived: false,
+            created_at: chrono::Utc::now(),
+        };
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(Self::database_error)?;
+
+        match transaction.execute(
+            "INSERT INTO projects (id, name, archived, created_at) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                project.id.to_string(),
+                project.name,
+                i64::from(project.archived),
+                project.created_at.to_rfc3339(),
+            ],
+        ) {
+            Ok(_) => {}
+            Err(rusqlite::Error::SqliteFailure(code, _))
+                if code.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                return Err(crate::error::AppError::ProjectNameConflict);
+            }
+            Err(error) => return Err(Self::database_error(error)),
+        }
+
+        let metadata_json = serde_json::json!({ "project_name": project.name }).to_string();
+        transaction
+            .execute(
+                "INSERT INTO domain_events (id, sequence, project_id, event_type, metadata_json, created_at)
+                 VALUES (?1, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM domain_events), ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    project.id.to_string(),
+                    "project_created",
+                    metadata_json,
+                    project.created_at.to_rfc3339(),
+                ],
+            )
+            .map_err(Self::database_error)?;
+        let project_id = project.id.to_string();
+        Self::insert_audit_event(
+            &transaction,
+            "project_create",
+            true,
+            context,
+            Some(("project", &project_id)),
+            "{}",
+        )?;
+        transaction.commit().map_err(Self::database_error)?;
+
+        Ok(project)
+    }
+
+    pub fn list_projects(&self) -> Result<Vec<crate::domain::Project>, crate::error::AppError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT id, name, archived, created_at FROM projects ORDER BY name ASC")
+            .map_err(Self::database_error)?;
+        let mut rows = statement.query([]).map_err(Self::database_error)?;
+        let mut projects = Vec::new();
+        while let Some(row) = rows.next().map_err(Self::database_error)? {
+            let id: String = row.get(0).map_err(Self::database_error)?;
+            let created_at: String = row.get(3).map_err(Self::database_error)?;
+            projects.push(crate::domain::Project {
+                id: uuid::Uuid::parse_str(&id)
+                    .map_err(|error| crate::error::AppError::Internal(error.to_string()))?,
+                name: row.get(1).map_err(Self::database_error)?,
+                archived: row.get::<_, i64>(2).map_err(Self::database_error)? != 0,
+                created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
+                    .map_err(|error| crate::error::AppError::Internal(error.to_string()))?
+                    .with_timezone(&chrono::Utc),
+            });
+        }
+        Ok(projects)
+    }
+
+    pub fn record_successful_operation(
+        &mut self,
+        operation: &str,
+        context: &crate::domain::ExecutionContext,
+        target: Option<(&str, &str)>,
+    ) -> Result<(), crate::error::AppError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(Self::database_error)?;
+        Self::insert_audit_event(&transaction, operation, true, context, target, "{}")?;
+        transaction.commit().map_err(Self::database_error)
+    }
+
+    pub fn record_failed_operation(
+        &mut self,
+        operation: &str,
+        context: &crate::domain::ExecutionContext,
+        error: &crate::error::AppError,
+    ) {
+        let result = (|| {
+            let transaction = self
+                .connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(Self::database_error)?;
+            let metadata_json = serde_json::json!({ "error_code": error.code() }).to_string();
+            Self::insert_audit_event(
+                &transaction,
+                operation,
+                false,
+                context,
+                None,
+                &metadata_json,
+            )?;
+            transaction.commit().map_err(Self::database_error)
+        })();
+        let _ = result;
+    }
+
+    fn insert_audit_event(
+        transaction: &rusqlite::Transaction<'_>,
+        operation: &str,
+        success: bool,
+        context: &crate::domain::ExecutionContext,
+        target: Option<(&str, &str)>,
+        metadata_json: &str,
+    ) -> Result<(), crate::error::AppError> {
+        let (target_type, target_id) = target.unzip();
+        transaction
+            .execute(
+                "INSERT INTO audit_events (
+                    id, occurred_at, operation, success, initiator_kind, initiator_name,
+                    session_id, target_type, target_id, metadata_json
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    chrono::Utc::now().to_rfc3339(),
+                    operation,
+                    i64::from(success),
+                    context.kind.as_str(),
+                    context.initiator_name(),
+                    context.session_id,
+                    target_type,
+                    target_id,
+                    metadata_json,
+                ],
+            )
+            .map_err(Self::database_error)?;
+        Ok(())
+    }
+
     fn create_parent_directory(path: &std::path::Path) -> Result<(), crate::error::AppError> {
         let Some(parent) = path.parent() else {
             return Ok(());

@@ -33,7 +33,13 @@ pub struct ProjectCommand {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum ProjectSubcommand {
+    Create(ProjectCreateCommand),
     List,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ProjectCreateCommand {
+    pub name: String,
 }
 
 #[derive(clap::Args, Debug)]
