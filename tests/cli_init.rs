@@ -45,7 +45,7 @@ fn assert_project_list_rejected_without_file_changes(
 }
 
 #[test]
-fn init_creates_a_version_one_database_once() {
+fn init_creates_a_version_two_database_with_migration_history() {
     let app = crate::support::TestApp::new();
 
     app.command()
@@ -59,7 +59,21 @@ fn init_creates_a_version_one_database_once() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        1
+        2
+    );
+    let migrations = connection
+        .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
+        .unwrap()
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        migrations,
+        vec![
+            (1, "phase1_baseline".to_owned()),
+            (2, "schema_migrations".to_owned()),
+        ]
     );
     assert_eq!(
         connection
@@ -95,6 +109,120 @@ fn init_creates_a_version_one_database_once() {
             .unwrap(),
         1
     );
+}
+
+#[test]
+fn project_list_migrates_a_version_one_database_and_records_history() {
+    let app = crate::support::TestApp::new();
+
+    app.command().arg("init").assert().success();
+    app.command()
+        .args(["project", "create", "bettr"])
+        .assert()
+        .success();
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    connection
+        .execute_batch(
+            "DROP TABLE IF EXISTS schema_migrations;\n\
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    drop(connection);
+
+    app.command()
+        .args(["project", "list", "--json"])
+        .assert()
+        .success();
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM projects WHERE name = 'bettr'", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        1
+    );
+    let migrations = connection
+        .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
+        .unwrap()
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        migrations,
+        vec![
+            (1, "phase1_baseline".to_owned()),
+            (2, "schema_migrations".to_owned()),
+        ]
+    );
+    let (audit_count, metadata): (i64, String) = connection
+        .query_row(
+            "SELECT COUNT(*), metadata_json FROM audit_events
+             WHERE operation = 'schema_migrate' AND success = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(audit_count, 1);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&metadata).unwrap(),
+        serde_json::json!({
+            "from_version": 1,
+            "to_version": 2,
+            "migration": "schema_migrations",
+        })
+    );
+}
+
+#[test]
+fn project_list_rejects_an_unknown_bettr_schema_version_without_changes() {
+    let app = crate::support::TestApp::new();
+    app.command().arg("init").assert().success();
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    connection
+        .execute_batch("PRAGMA user_version = 99;")
+        .unwrap();
+    drop(connection);
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let sidecar = sqlite_sidecar(&app.database, suffix);
+        match std::fs::remove_file(sidecar) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("failed to remove SQLite sidecar: {error}"),
+        }
+    }
+    let expected_bytes = std::fs::read(&app.database).unwrap();
+    let expected_directory_entries = directory_entries(app.dir.path());
+
+    let output = app
+        .command()
+        .args(["project", "list", "--json"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let response: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(
+        response["error"]["code"],
+        "unsupported_database_schema_version"
+    );
+    assert_eq!(response["error"]["details"]["found_version"], 99);
+    assert_eq!(response["error"]["details"]["current_version"], 2);
+    assert_eq!(std::fs::read(&app.database).unwrap(), expected_bytes);
+    assert_eq!(directory_entries(app.dir.path()), expected_directory_entries);
+    for suffix in ["-wal", "-shm", "-journal"] {
+        assert!(!sqlite_sidecar(&app.database, suffix).exists());
+    }
 }
 
 #[test]
