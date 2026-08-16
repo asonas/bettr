@@ -9,6 +9,8 @@
   const breadcrumbs = document.querySelector("#breadcrumbs");
   const state = { status: null, snapshot: "", updatedIssues: new Set(), project: "", search: "" };
   let statusPollInFlight = false;
+  let projectNavInFlight = false;
+  let projectNavSnapshot = "";
   const webState = globalThis.BettrWebState;
 
   const statusLabels = {
@@ -86,6 +88,7 @@
       board.innerHTML = `<div class="loading-state"><span class="loader" aria-hidden="true"></span><span>Loading Issues</span></div>`;
       return;
     }
+    const focusedCard = document.activeElement?.matches(".kanban-card") ? issueKey({ project: document.activeElement.dataset.project, number: document.activeElement.dataset.number }) : "";
     const query = state.search.trim().toLowerCase();
     const issues = webState.allIssues(state.status).filter((item) => {
       if (state.project && item.project !== state.project) return false;
@@ -98,6 +101,7 @@
       return `<section class="kanban-column" data-state="${key}"><header class="kanban-column-header"><h2>${title}</h2><span>${columnIssues.length}</span></header><div class="kanban-cards">${columnIssues.length ? columnIssues.map(kanbanCard).join("") : `<div class="kanban-empty">No Issues</div>`}</div></section>`;
     }).join("");
     bindIssueRows();
+    if (focusedCard) [...document.querySelectorAll(".kanban-card")].find((card) => issueKey({ project: card.dataset.project, number: card.dataset.number }) === focusedCard)?.focus();
   }
 
   async function renderDetail(project, number) {
@@ -185,15 +189,24 @@
 
   async function loadProjectNavigation() {
     const list = document.querySelector("#project-nav-list");
+    if (projectNavInFlight) return;
+    projectNavInFlight = true;
     try {
       const projects = (await api("/api/projects")).data.filter((project) => !project.archived);
+      const nextSnapshot = JSON.stringify(projects);
+      if (nextSnapshot === projectNavSnapshot) return;
+      const focusedProject = document.activeElement?.matches("[data-project-nav]") ? document.activeElement.dataset.projectNav : "";
+      projectNavSnapshot = nextSnapshot;
       list.innerHTML = projects.length ? projects.map((project) => {
         const name = escapeHtml(project.name);
-        return `<a class="project-nav-link" data-project-nav="${name}" href="#/projects/${escapeHtml(encodeURIComponent(project.name))}"><span class="project-nav-dot" aria-hidden="true"></span><span>${name}</span></a>`;
+        return `<a class="project-nav-link" data-project-nav="${name}" aria-label="Project ${name}" title="${name}" href="#/projects/${escapeHtml(encodeURIComponent(project.name))}"><span class="project-nav-dot" aria-hidden="true"></span><span>${name}</span></a>`;
       }).join("") : `<span class="project-nav-state">No projects</span>`;
       setActiveProjectNav(state.project);
+      if (focusedProject) [...document.querySelectorAll("[data-project-nav]")].find((link) => link.dataset.projectNav === focusedProject)?.focus();
     } catch (error) {
       list.innerHTML = `<span class="project-nav-state">Projects unavailable</span>`;
+    } finally {
+      projectNavInFlight = false;
     }
   }
 
@@ -222,6 +235,7 @@
       state.status = response.data;
       state.snapshot = snapshot(response.data);
       state.updatedIssues = update.updatedIssues;
+      loadProjectNavigation();
       if (firstPoll) route();
       else if (changed.length) { showUpdateBanner(changed.length); refreshCurrentView(); }
     } catch (error) {

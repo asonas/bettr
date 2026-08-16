@@ -212,6 +212,9 @@ fn web_projects_are_a_sidebar_kanban_with_update_indicators() {
     assert!(app_js.contains("renderProjects(project = \"\")"));
     assert!(app_js.contains("kanban-board"));
     assert!(app_js.contains("updatedIssues"));
+    assert!(app_js.contains("focusedCard"));
+    assert!(app_js.contains("projectNavInFlight"));
+    assert!(app_js.contains("aria-label=\"Project ${name}\""));
     assert!(state_js.contains("changedIssueKeys"));
     assert!(app_css.contains(".kanban-board"));
     assert!(app_css.contains(".kanban-card.is-updated"));
