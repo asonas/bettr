@@ -160,14 +160,14 @@ mod tests {
     fn unsupported_schema_version_has_a_stable_input_error_contract() {
         let error = super::AppError::UnsupportedDatabaseSchemaVersion {
             found_version: 99,
-            current_version: 2,
+            current_version: 3,
         };
 
         assert_eq!(error.exit_code() as u8, 2);
         assert_eq!(error.code(), "unsupported_database_schema_version");
         assert_eq!(
             error.to_string(),
-            "database schema version 99 is unsupported; current version is 2"
+            "database schema version 99 is unsupported; current version is 3"
         );
     }
 }

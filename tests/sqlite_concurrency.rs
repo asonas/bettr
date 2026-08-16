@@ -19,6 +19,8 @@ const CONTENDER_DATABASE: &str = "BETTR_TEST_CONTENDER_DATABASE";
 const CONTENDER_REACHED_BUSY_HANDLER: &str = "BETTR_TEST_CONTENDER_REACHED_BUSY_HANDLER";
 const GATED_DATABASE: &str = "BETTR_TEST_GATED_DATABASE";
 const GATED_ARGUMENTS: &str = "BETTR_TEST_GATED_ARGUMENTS";
+const GATED_AGENT: &str = "BETTR_TEST_GATED_AGENT";
+const GATED_SESSION_ID: &str = "BETTR_TEST_GATED_SESSION_ID";
 const GATE_READY: &str = "BETTR_TEST_GATE_READY";
 const OPEN_GATE: u8 = b'G';
 
@@ -86,6 +88,19 @@ impl TestProcess {
         drop(self.stdout.take());
         assert!(status.success());
     }
+
+    fn output(mut self) -> std::process::Output {
+        let mut child = self.child.take().unwrap();
+        drop(self.stdin.take());
+        let mut stdout = Vec::new();
+        std::io::Read::read_to_end(&mut self.stdout.take().unwrap(), &mut stdout).unwrap();
+        let status = child.wait().unwrap();
+        std::process::Output {
+            status,
+            stdout,
+            stderr: Vec::new(),
+        }
+    }
 }
 
 impl Drop for TestProcess {
@@ -147,10 +162,24 @@ struct GatedBettr(TestProcess);
 
 impl GatedBettr {
     fn start(database: &std::path::Path, arguments: &[String], gate: &StartGate) -> Self {
+        Self::start_with_context(database, arguments, gate, None)
+    }
+
+    fn start_with_context(
+        database: &std::path::Path,
+        arguments: &[String],
+        gate: &StartGate,
+        context: Option<(&str, &str)>,
+    ) -> Self {
         let mut command = helper_command("run_bettr_after_parent_opens_start_gate");
         command
             .env(GATED_DATABASE, database)
             .env(GATED_ARGUMENTS, serde_json::to_string(arguments).unwrap());
+        if let Some((agent, session_id)) = context {
+            command
+                .env(GATED_AGENT, agent)
+                .env(GATED_SESSION_ID, session_id);
+        }
         Self(TestProcess::start(
             command,
             gate.child_stdin(),
@@ -161,6 +190,10 @@ impl GatedBettr {
 
     fn wait(self) {
         self.0.wait();
+    }
+
+    fn output(self) -> std::process::Output {
+        self.0.output()
     }
 }
 
@@ -319,15 +352,15 @@ fn run_bettr_after_parent_opens_start_gate() {
     std::io::Read::read_exact(&mut gate_stream, &mut gate_token).unwrap();
     assert_eq!(gate_token[0], OPEN_GATE);
 
-    let output = bettr_command(std::path::Path::new(&database_path))
-        .args(arguments)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "gated bettr failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let mut command = bettr_command(std::path::Path::new(&database_path));
+    if let Some(agent) = std::env::var_os(GATED_AGENT) {
+        command.env("BETTR_AGENT", agent);
+    }
+    if let Some(session_id) = std::env::var_os(GATED_SESSION_ID) {
+        command.env("BETTR_SESSION_ID", session_id);
+    }
+    let output = command.args(arguments).output().unwrap();
+    std::process::exit(output.status.code().unwrap_or(1));
 }
 
 #[test]
@@ -696,6 +729,61 @@ fn concurrent_issue_and_comment_processes_preserve_database_integrity() {
             "unexpected successful audit count for {operation}"
         );
     }
+}
+
+#[test]
+fn concurrent_claim_processes_allow_exactly_one_owner() {
+    let app = initialized_issue();
+    let arguments = vec![
+        "issue".to_owned(),
+        "claim".to_owned(),
+        "1".to_owned(),
+        "--project".to_owned(),
+        "bettr".to_owned(),
+        "--json".to_owned(),
+    ];
+    let gate = StartGate::new();
+    let mut processes = Vec::new();
+    for (agent, session_id) in [("codex", "session-a"), ("worker", "session-b")] {
+        processes.push(GatedBettr::start_with_context(
+            &app.database,
+            &arguments,
+            &gate,
+            Some((agent, session_id)),
+        ));
+    }
+
+    gate.open(processes.len());
+    let outputs = processes
+        .into_iter()
+        .map(GatedBettr::output)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outputs
+            .iter()
+            .filter(|output| output.status.success())
+            .count(),
+        1
+    );
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    let (state, assignee, revision, session_id): (String, Option<String>, i64, String) = connection
+        .query_row(
+            "SELECT issue.state, issue.assignee_name, issue.revision, lease.session_id
+             FROM issues issue
+             JOIN issue_leases lease ON lease.issue_id = issue.id
+             WHERE issue.number = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(state, "in_progress");
+    assert!(matches!(
+        assignee.as_deref(),
+        Some("codex") | Some("worker")
+    ));
+    assert_eq!(revision, 2);
+    assert!(matches!(session_id.as_str(), "session-a" | "session-b"));
 }
 
 #[test]
