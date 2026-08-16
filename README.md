@@ -88,6 +88,15 @@ BETTR_OPERATOR=reviewer bettr issue resume 1 --project bettr --revision 4
 
 `BETTR_PROJECT` supplies a default project. Project resolution is command argument, environment, nearest `.bettr.toml`, user config, then no default. User config is stored at `~/Library/Application Support/bettr/config.toml` on macOS and `${XDG_CONFIG_HOME:-~/.config}/bettr/config.toml` on Linux.
 
+## Codex skill
+
+The repository includes a `bettr` skill for agents that need to record work in the local Issue tracker. Once this repository is available on GitHub, install it with the Codex skill installer:
+
+```sh
+python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
+  --repo asonas/bettr --path skills/bettr --ref main
+```
+
 ## Phase 1 scope
 
 Phase 1 provides projects, priorities (`critical`, `high`, `medium`, and `low`), five Issue states (`todo`, `in_progress`, `blocked`, `done`, and `cancelled`), immutable comments, revision-guarded edits, history, cross-project status, execution context, and SQLite audit events.
