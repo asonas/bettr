@@ -723,7 +723,14 @@ impl Database {
         sql.push_str(
             " ORDER BY
                 CASE WHEN 0 THEN 0 ELSE 1 END ASC,
-                CASE i.state WHEN 'blocked' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END ASC,
+                CASE i.state
+                    WHEN 'blocked' THEN 0
+                    WHEN 'in_progress' THEN 1
+                    WHEN 'todo' THEN 2
+                    WHEN 'done' THEN 3
+                    WHEN 'cancelled' THEN 4
+                    ELSE 5
+                END ASC,
                 CASE i.priority
                     WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2
                     WHEN 'low' THEN 3 ELSE 4

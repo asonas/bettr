@@ -1,5 +1,6 @@
 const INDEX_HTML: &str = include_str!("web/index.html");
 const APP_CSS: &str = include_str!("web/app.css");
+const STATE_JS: &str = include_str!("web/state.js");
 const APP_JS: &str = include_str!("web/app.js");
 
 const MAX_REQUEST_LINE: usize = 8 * 1024;
@@ -121,6 +122,7 @@ fn route_request(database_path: &std::path::Path, request: &Request) -> HttpResp
     match request.path.as_str() {
         "/" => HttpResponse::text(200, "text/html; charset=utf-8", INDEX_HTML),
         "/app.css" => HttpResponse::text(200, "text/css; charset=utf-8", APP_CSS),
+        "/state.js" => HttpResponse::text(200, "text/javascript; charset=utf-8", STATE_JS),
         "/app.js" => HttpResponse::text(200, "text/javascript; charset=utf-8", APP_JS),
         "/api/status" => with_database(database_path, |app| app.status().map(json_success)),
         "/api/projects" => {
