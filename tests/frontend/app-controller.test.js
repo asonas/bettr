@@ -62,7 +62,21 @@ describe("web controller", () => {
     await controller.renderRecent();
 
     expect(document.querySelector(".page-header")).toBeNull();
+    expect(getByRole(document, "heading", { level: 1, name: "Recent" })).toBeTruthy();
     expect(queryByText(document, "Activity")).toBeNull();
     expect(queryByText(document, "Recently updated Issues across the workspace.")).toBeNull();
+  });
+
+  it("uses a contextual empty state for Recent", async () => {
+    mountShell();
+    const { createWebController } = await import("../../src/web/app.js");
+    const controller = createWebController({ fetch: vi.fn() });
+
+    controller.state.status = { attention: [], stale: [], blocked: [], recently_completed: [], active: [] };
+    await controller.renderRecent();
+
+    expect(getByRole(document, "heading", { level: 1, name: "Recent" })).toBeTruthy();
+    expect(queryByText(document, "New updates will appear here.")).toBeTruthy();
+    expect(queryByText(document, "Try a different filter to find another Issue.")).toBeNull();
   });
 });

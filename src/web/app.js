@@ -54,8 +54,8 @@ export function createWebController({
     </button>`;
   }
 
-  function issueList(items, emptyTitle = "No matching Issues") {
-    if (!items.length) return `<div class="empty-state"><strong>${emptyTitle}</strong><span>Try a different filter to find another Issue.</span></div>`;
+  function issueList(items, emptyTitle = "No matching Issues", emptyMessage = "Try a different filter to find another Issue.") {
+    if (!items.length) return `<div class="empty-state"><strong>${emptyTitle}</strong><span>${emptyMessage}</span></div>`;
     return `<div class="issue-list">${items.map(issueRow).join("")}</div>`;
   }
 
@@ -124,7 +124,7 @@ export function createWebController({
     breadcrumbs.innerHTML = "<span>Recent</span>";
     const focusedIssue = document.activeElement?.matches(".issue-row") ? issueKey({ project: document.activeElement.dataset.project, number: document.activeElement.dataset.number }) : "";
     const items = stateApi.allIssues(state.status).sort((a, b) => new Date(b.issue.updated_at) - new Date(a.issue.updated_at));
-    app.innerHTML = issueList(items, "No recent updates");
+    app.innerHTML = `<h1 class="sr-only">Recent</h1>${issueList(items, "No recent updates", "New updates will appear here.")}`;
     bindIssueRows();
     if (focusedIssue) [...document.querySelectorAll(".issue-row")].find((row) => issueKey({ project: row.dataset.project, number: row.dataset.number }) === focusedIssue)?.focus();
   }
