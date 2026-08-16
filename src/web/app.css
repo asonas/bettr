@@ -72,14 +72,20 @@ a { color: inherit; text-decoration: none; }
 .brand-mark span:nth-child(2) { height: 10px; opacity: .84; }
 .brand-mark span:nth-child(3) { height: 14px; }
 
-.sidebar-label { margin: 0 10px 8px; color: var(--ink-faint); font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
-
 .nav-list { display: grid; gap: 3px; }
 .nav-list a, .nav-button { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 34px; padding: 6px 10px; color: var(--ink-muted); background: transparent; border: 0; border-radius: 7px; cursor: pointer; font-size: 13px; text-align: left; }
 .nav-list a:hover, .nav-button:hover { color: var(--ink); background: var(--surface); }
 .nav-list a[aria-current="page"] { color: var(--ink); background: var(--surface); box-shadow: 0 1px 2px rgba(0,0,0,.04); }
 .nav-icon { display: inline-grid; width: 17px; place-items: center; color: var(--ink-faint); font-size: 16px; }
-.nav-list kbd { margin-left: auto; color: var(--ink-faint); font-size: 10px; font-family: inherit; }
+
+.project-nav { display: grid; gap: 8px; margin: 25px 10px 0; }
+.project-nav-label { color: var(--ink-faint); font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.project-nav-list { display: grid; max-height: min(30vh, 240px); gap: 2px; overflow-y: auto; }
+.project-nav-link { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 5px 8px; overflow: hidden; color: var(--ink-muted); border-radius: 6px; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.project-nav-link:hover, .project-nav-link[aria-current="page"] { color: var(--ink); background: var(--surface); }
+.project-nav-link[aria-current="page"] { box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+.project-nav-dot { width: 7px; height: 7px; flex: 0 0 auto; background: var(--accent); border-radius: 50%; }
+.project-nav-state { color: var(--ink-faint); font-size: 11px; }
 
 .sidebar-spacer { flex: 1; }
 .connection-state { display: flex; align-items: center; gap: 8px; margin: 0 10px 14px; color: var(--ink-muted); font-size: 11px; }
@@ -105,13 +111,22 @@ a { color: inherit; text-decoration: none; }
 .eyebrow { margin: 0 0 8px; color: var(--accent); font-size: 10px; font-weight: 750; letter-spacing: .13em; text-transform: uppercase; }
 h1 { margin: 0; font-size: clamp(26px, 3vw, 36px); font-weight: 720; letter-spacing: -.02em; line-height: 1.1; }
 .page-summary { max-width: 420px; margin: 9px 0 0; color: var(--ink-muted); font-size: 13px; line-height: 1.55; }
-.section-grid { display: grid; gap: 24px; }
-.status-section { position: relative; }
-.status-section::before { position: absolute; top: 6px; bottom: 6px; left: -14px; width: 2px; background: var(--section-color, var(--line-strong)); border-radius: 2px; content: ""; }
-.section-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; }
-.section-heading h2 { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: -.01em; }
-.section-heading span { color: var(--ink-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
-.section-note { margin: -3px 0 10px; color: var(--ink-muted); font-size: 11px; }
+.kanban-board { display: grid; grid-template-columns: repeat(5, minmax(220px, 1fr)); gap: 14px; align-items: start; overflow-x: auto; padding-bottom: 14px; }
+.kanban-column { min-width: 220px; }
+.kanban-column-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.kanban-column-header h2 { margin: 0; color: var(--ink-muted); font-size: 12px; font-weight: 700; letter-spacing: .01em; }
+.kanban-column-header span { color: var(--ink-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.kanban-cards { display: grid; min-height: 76px; gap: 8px; }
+.kanban-card { display: grid; gap: 9px; width: 100%; min-height: 122px; padding: 12px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 1px 1px rgba(0,0,0,.02); cursor: pointer; text-align: left; transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease; }
+.kanban-card:hover, .kanban-card:focus-visible { border-color: var(--line-strong); box-shadow: var(--shadow); transform: translateY(-1px); }
+.kanban-card.is-updated { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent); }
+.kanban-card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; color: var(--ink-faint); font-size: 10px; }
+.kanban-card-title { display: -webkit-box; overflow: hidden; font-size: 13px; font-weight: 620; line-height: 1.35; text-overflow: ellipsis; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.kanban-card-meta { display: flex; min-width: 0; gap: 8px; overflow: hidden; color: var(--ink-muted); font-size: 10px; white-space: nowrap; }
+.kanban-card-time { color: var(--ink-faint); font-size: 10px; font-variant-numeric: tabular-nums; }
+.update-indicator { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; color: var(--accent); font-size: 10px; font-weight: 650; }
+.update-indicator-dot { width: 6px; height: 6px; background: var(--accent); border-radius: 50%; }
+.kanban-empty { min-height: 76px; padding: 16px 12px; color: var(--ink-faint); border: 1px dashed var(--line-strong); border-radius: 9px; font-size: 11px; text-align: center; }
 
 .issue-list { overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 1px 1px rgba(0,0,0,.02); }
 .issue-row { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; gap: 13px; align-items: center; width: 100%; padding: 13px 15px; color: var(--ink); background: transparent; border: 0; border-bottom: 1px solid var(--line); cursor: pointer; text-align: left; }
@@ -142,8 +157,6 @@ h1 { margin: 0; font-size: clamp(26px, 3vw, 36px); font-weight: 720; letter-spac
 .search-box { display: flex; align-items: center; gap: 8px; width: min(390px, 100%); padding: 0 11px; color: var(--ink-muted); background: var(--surface); border: 1px solid var(--line); border-radius: 7px; }
 .search-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 13%, transparent); }
 .search-box input { width: 100%; min-height: 34px; color: var(--ink); background: transparent; border: 0; outline: 0; font-size: 12px; }
-.filter-select { min-height: 34px; padding: 0 10px; color: var(--ink-muted); background: var(--surface); border: 1px solid var(--line); border-radius: 7px; font-size: 11px; }
-
 .detail-layout { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: clamp(32px, 6vw, 74px); align-items: start; }
 .detail-title { margin: 7px 0 12px; font-size: clamp(27px, 4vw, 40px); line-height: 1.08; }
 .detail-key { color: var(--ink-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -177,8 +190,11 @@ h1 { margin: 0; font-size: clamp(26px, 3vw, 36px); font-weight: 720; letter-spac
   :root { --sidebar-width: 66px; }
   .sidebar { padding: 18px 8px 13px; }
   .brand { justify-content: center; margin: 0 0 28px; }
-  .brand > span:last-child, .sidebar-label, .nav-list a span:not(.nav-icon), .nav-button span:not(.nav-icon), .nav-list kbd, .connection-state span:last-child, .sidebar-footer { display: none; }
+  .brand > span:last-child, .nav-list a span:not(.nav-icon), .nav-button span:not(.nav-icon), .project-nav-label, .project-nav-link span:last-child, .project-nav-state, .connection-state span:last-child, .sidebar-footer { display: none; }
   .nav-list a, .nav-button { justify-content: center; padding: 7px; }
+  .project-nav { margin-inline: 0; }
+  .project-nav-list { max-height: 34vh; }
+  .project-nav-link { justify-content: center; padding: 7px; }
   .connection-state { justify-content: center; margin-inline: 0; }
   .workspace { width: calc(100% - var(--sidebar-width)); margin-left: var(--sidebar-width); }
   .topbar { padding-inline: 18px; }

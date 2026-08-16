@@ -7,11 +7,9 @@
   const applyUpdate = document.querySelector("#apply-update");
   const syncLabel = document.querySelector("#sync-label");
   const breadcrumbs = document.querySelector("#breadcrumbs");
-  const state = { status: null, snapshot: "", pending: null, pendingCount: 0, issueRows: [], focusIndex: -1 };
-  let goPending = false;
-  let goTimer;
+  const state = { status: null, snapshot: "", updatedIssues: new Set(), project: "", search: "" };
   let statusPollInFlight = false;
-  let statusPollEpoch = 0;
+  const webState = globalThis.BettrWebState;
 
   const statusLabels = {
     todo: "Todo",
@@ -20,14 +18,6 @@
     done: "Done",
     cancelled: "Cancelled",
   };
-
-  const sections = [
-    ["attention", "Attention required", "判断待ち", "var(--danger)"],
-    ["stale", "Stale work", "更新が止まっている進行中Issue", "var(--signal)"],
-    ["blocked", "Blocked", "人間の判断または依存待ち", "var(--signal)"],
-    ["recently_completed", "Recently completed", "最近完了または中止されたIssue", "var(--success)"],
-    ["active", "Active", "現在稼働中のIssue", "var(--accent)"],
-  ];
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>'"]/g, (character) => ({
@@ -58,35 +48,56 @@
     return `<div class="issue-list">${items.map(issueRow).join("")}</div>`;
   }
 
+  function kanbanCard(item) {
+    const issue = item.issue || item;
+    const project = item.project || issue.project || "";
+    const key = issueKey({ project, number: issue.number });
+    const priority = issue.priority ? `<span class="priority ${escapeHtml(issue.priority)}">${escapeHtml(issue.priority)}</span>` : "";
+    const assignee = issue.assignee_name ? `<span>${escapeHtml(issue.assignee_name)}</span>` : "";
+    const updated = state.updatedIssues.has(key);
+    return `<button class="kanban-card${updated ? " is-updated" : ""}" type="button" data-project="${escapeHtml(project)}" data-number="${issue.number}">
+      <span class="kanban-card-header"><span class="issue-key">${escapeHtml(key)}</span>${updated ? `<span class="update-indicator"><span class="update-indicator-dot" aria-hidden="true"></span><span>Updated</span></span>` : ""}</span>
+      <span class="kanban-card-title">${escapeHtml(issue.title)}</span>
+      <span class="kanban-card-meta">${priority}${assignee}</span>
+      <time class="kanban-card-time" datetime="${escapeHtml(issue.updated_at)}">${formatDate(issue.updated_at)}</time>
+    </button>`;
+  }
+
   function setPage(title, eyebrow, summary = "") {
     breadcrumbs.innerHTML = `<span>${escapeHtml(title)}</span>`;
     return `<div class="page-header"><div><p class="eyebrow">${escapeHtml(eyebrow)}</p><h1>${escapeHtml(title)}</h1>${summary ? `<p class="page-summary">${escapeHtml(summary)}</p>` : ""}</div></div>`;
   }
 
-  function renderOverview(status) {
-    const nonEmpty = sections.filter(([key]) => status[key]?.length);
-    const sectionsHtml = nonEmpty.map(([key, title, note, color]) => `<section class="status-section" style="--section-color:${color}"><div class="section-heading"><h2>${title}</h2><span>${status[key].length}件</span></div><p class="section-note">${note}</p>${issueList(status[key])}</section>`).join("");
-    app.innerHTML = setPage("Overview", "Supervisor view", "いま介入すべき場所から、プロジェクト全体の動きを俯瞰します.") + (nonEmpty.length ? `<div class="section-grid">${sectionsHtml}</div>` : `<div class="all-clear"><span class="all-clear-mark" aria-hidden="true">✓</span><span>現在、注意が必要なIssueはありません。</span></div>`);
-    bindIssueRows();
+  function renderProjects(project = "") {
+    state.project = project;
+    setActiveProjectNav(project);
+    breadcrumbs.innerHTML = project ? `<a href="#/projects">Projects</a><span> / ${escapeHtml(project)}</span>` : "<span>Projects</span>";
+    const title = project || "Projects";
+    const summary = project ? `Issues in ${escapeHtml(project)}` : "Track every Issue across the workspace.";
+    app.innerHTML = `<div class="page-header"><div><p class="eyebrow">Workspace</p><h1>${escapeHtml(title)}</h1><p class="page-summary">${summary}</p></div></div><div class="toolbar"><label class="search-box"><span aria-hidden="true">⌕</span><span class="sr-only">Search Issues</span><input id="issue-search" type="search" value="${escapeHtml(state.search)}" placeholder="Search title or body" autocomplete="off" /></label></div><div id="kanban-board" class="kanban-board" aria-label="Issue board"></div>`;
+    document.querySelector("#issue-search").addEventListener("input", (event) => { state.search = event.target.value; renderKanban(); });
+    renderKanban();
   }
 
-  async function renderProjects() {
-    breadcrumbs.innerHTML = "<span>Projects</span>";
-    app.innerHTML = `<div class="page-header"><div><p class="eyebrow">Workspace</p><h1>Projects</h1><p class="page-summary">プロジェクトを横断してIssueの状態を確認します。</p></div></div><div class="toolbar"><label class="search-box"><span aria-hidden="true">⌕</span><span class="sr-only">Issueを検索</span><input id="issue-search" type="search" placeholder="タイトルや本文を検索" autocomplete="off" /></label><select id="project-filter" class="filter-select" aria-label="プロジェクトで絞り込む"><option value="">すべてのプロジェクト</option></select></div><div id="project-list"><div class="loading-state"><span class="loader" aria-hidden="true"></span><span>Issueを読み込んでいます</span></div></div>`;
-    const projects = await api("/api/projects");
-    const select = document.querySelector("#project-filter");
-    select.insertAdjacentHTML("beforeend", projects.data.map((project) => `<option value="${escapeHtml(project.name)}">${escapeHtml(project.name)}</option>`).join(""));
-    const load = async () => {
-      const query = new URLSearchParams({ include_done: "true" });
-      if (select.value) query.set("project", select.value);
-      if (document.querySelector("#issue-search").value) query.set("query", document.querySelector("#issue-search").value);
-      const issues = await api(`/api/issues?${query}`);
-      document.querySelector("#project-list").innerHTML = issueList(issues.data);
-      bindIssueRows();
-    };
-    select.addEventListener("change", load);
-    document.querySelector("#issue-search").addEventListener("input", load);
-    await load();
+  function renderKanban() {
+    const board = document.querySelector("#kanban-board");
+    if (!board) return;
+    if (!state.status) {
+      board.innerHTML = `<div class="loading-state"><span class="loader" aria-hidden="true"></span><span>Loading Issues</span></div>`;
+      return;
+    }
+    const query = state.search.trim().toLowerCase();
+    const issues = webState.allIssues(state.status).filter((item) => {
+      if (state.project && item.project !== state.project) return false;
+      if (!query) return true;
+      const issue = item.issue;
+      return [item.project, issue.title, issue.body, issue.priority, issue.assignee_name].filter(Boolean).join(" ").toLowerCase().includes(query);
+    });
+    board.innerHTML = webState.kanbanColumns.map(([key, title]) => {
+      const columnIssues = issues.filter((item) => item.issue.state === key);
+      return `<section class="kanban-column" data-state="${key}"><header class="kanban-column-header"><h2>${title}</h2><span>${columnIssues.length}</span></header><div class="kanban-cards">${columnIssues.length ? columnIssues.map(kanbanCard).join("") : `<div class="kanban-empty">No Issues</div>`}</div></section>`;
+    }).join("");
+    bindIssueRows();
   }
 
   async function renderDetail(project, number) {
@@ -107,7 +118,7 @@
 
   async function renderRecent() {
     breadcrumbs.innerHTML = "<span>Recent</span>";
-    const items = [...(state.status?.recently_completed || []), ...(state.status?.active || [])].sort((a, b) => new Date(b.issue.updated_at) - new Date(a.issue.updated_at));
+    const items = webState.allIssues(state.status).sort((a, b) => new Date(b.issue.updated_at) - new Date(a.issue.updated_at));
     app.innerHTML = setPage("Recent", "Activity", "最近変化したIssueを時系列で確認します。") + issueList(items, "最近の更新はありません");
     bindIssueRows();
   }
@@ -134,12 +145,12 @@
   async function route() {
     try {
       const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
-      const name = parts[0] || "overview";
+      const name = parts[0] || "projects";
       setActiveNav(name === "issues" ? "projects" : name);
-      if (name === "projects") return await renderProjects();
+      if (name === "projects") return renderProjects(parts[1] || "");
       if (name === "recent") return renderRecent();
       if (name === "issues" && parts[1] && parts[2]) return await renderDetail(parts[1], Number(parts[2]));
-      return renderOverview(state.status || { attention: [], stale: [], blocked: [], recently_completed: [], active: [] });
+      return renderProjects();
     } catch (error) { renderError(error); }
   }
 
@@ -147,9 +158,16 @@
     document.querySelectorAll("[data-nav]").forEach((link) => link.setAttribute("aria-current", link.dataset.nav === name ? "page" : "false"));
   }
 
+  function setActiveProjectNav(project) {
+    document.querySelectorAll("[data-project-nav]").forEach((link) => link.setAttribute("aria-current", link.dataset.projectNav === project ? "page" : "false"));
+  }
+
   function bindIssueRows() {
-    state.issueRows = [...document.querySelectorAll(".issue-row")];
-    state.issueRows.forEach((row, index) => { row.dataset.index = String(index); row.addEventListener("click", () => { location.hash = `#/issues/${encodeURIComponent(row.dataset.project)}/${row.dataset.number}`; }); });
+    document.querySelectorAll(".issue-row, .kanban-card").forEach((row) => row.addEventListener("click", () => {
+      const key = `${row.dataset.project}#${row.dataset.number}`;
+      state.updatedIssues.delete(key);
+      location.hash = `#/issues/${encodeURIComponent(row.dataset.project)}/${row.dataset.number}`;
+    }));
   }
 
   function renderError(error) {
@@ -165,36 +183,47 @@
     return body;
   }
 
+  async function loadProjectNavigation() {
+    const list = document.querySelector("#project-nav-list");
+    try {
+      const projects = (await api("/api/projects")).data.filter((project) => !project.archived);
+      list.innerHTML = projects.length ? projects.map((project) => {
+        const name = escapeHtml(project.name);
+        return `<a class="project-nav-link" data-project-nav="${name}" href="#/projects/${escapeHtml(encodeURIComponent(project.name))}"><span class="project-nav-dot" aria-hidden="true"></span><span>${name}</span></a>`;
+      }).join("") : `<span class="project-nav-state">No projects</span>`;
+      setActiveProjectNav(state.project);
+    } catch (error) {
+      list.innerHTML = `<span class="project-nav-state">Projects unavailable</span>`;
+    }
+  }
+
   function snapshot(status) { return JSON.stringify(status); }
 
-  function showUpdateBanner() {
-    if (!state.pending) return;
-    updateMessage.textContent = state.pendingCount ? `新しい更新があります（${state.pendingCount}件）` : "新しい更新があります";
+  function showUpdateBanner(count) {
+    updateMessage.textContent = `${count} Issue${count === 1 ? "" : "s"} updated`;
     banner.hidden = false;
   }
 
-  function changedIssueCount(previous, next) {
-    const collect = (status) => Object.values(status || {}).flatMap((items) => Array.isArray(items) ? items : []).reduce((map, item) => {
-      const issue = item.issue || item;
-      map.set(`${item.project || ""}#${issue.number}`, `${issue.updated_at}:${issue.revision}:${issue.state}`);
-      return map;
-    }, new Map());
-    const before = collect(previous);
-    const after = collect(next);
-    const keys = new Set([...before.keys(), ...after.keys()]);
-    return [...keys].filter((key) => before.get(key) !== after.get(key)).length;
+  function refreshCurrentView() {
+    const name = location.hash.replace(/^#\/?/, "").split("/")[0] || "projects";
+    if (name === "projects") renderKanban();
+    if (name === "recent") renderRecent();
   }
 
   async function pollStatus() {
     if (statusPollInFlight) return;
     statusPollInFlight = true;
-    const pollEpoch = statusPollEpoch;
     try {
       const response = await api("/api/status");
-      if (pollEpoch !== statusPollEpoch) return;
       syncLabel.textContent = `最終確認 ${formatDate(new Date().toISOString())}`;
-      if (!state.snapshot) { state.status = response.data; state.snapshot = snapshot(response.data); route(); return; }
-      if (snapshot(response.data) !== state.snapshot) { state.pending = response.data; state.pendingCount = changedIssueCount(state.status, response.data); showUpdateBanner(); }
+      const firstPoll = !state.snapshot;
+      const update = webState.applyStatusUpdate(firstPoll ? null : state.status, response.data, state.updatedIssues);
+      const changed = update.changedKeys;
+      state.status = response.data;
+      state.snapshot = snapshot(response.data);
+      state.updatedIssues = update.updatedIssues;
+      if (firstPoll) route();
+      else if (changed.length) { showUpdateBanner(changed.length); refreshCurrentView(); }
     } catch (error) {
       syncLabel.textContent = "更新を確認できません";
       document.querySelector("#connection-state").innerHTML = `<span class="connection-dot" style="background:var(--signal)" aria-hidden="true"></span><span>再接続待ち</span>`;
@@ -204,28 +233,13 @@
   }
 
   applyUpdate.addEventListener("click", () => {
-    if (!state.pending) return;
-    statusPollEpoch += 1;
-    state.status = state.pending;
-    state.snapshot = snapshot(state.pending);
-    state.pending = null;
-    state.pendingCount = 0;
     banner.hidden = true;
-    route();
   });
   document.querySelector("#search-nav").addEventListener("click", () => { location.hash = "#/projects"; setTimeout(() => document.querySelector("#issue-search")?.focus(), 0); });
   document.querySelector("#theme-toggle").addEventListener("click", () => { const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = next; localStorage.setItem("bettr-theme", next); });
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "/" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) { event.preventDefault(); location.hash = "#/projects"; setTimeout(() => document.querySelector("#issue-search")?.focus(), 0); }
-    if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) return;
-    if (event.key.toLowerCase() === "g") { goPending = true; clearTimeout(goTimer); goTimer = setTimeout(() => { goPending = false; }, 900); return; }
-    if (goPending && event.key.toLowerCase() === "o") { goPending = false; clearTimeout(goTimer); location.hash = "#/overview"; return; }
-    const key = event.key.toLowerCase();
-    if (!["j", "k"].includes(key) || !state.issueRows.length) return;
-    event.preventDefault(); state.focusIndex = Math.max(0, Math.min(state.issueRows.length - 1, state.focusIndex + (key === "j" ? 1 : -1))); state.issueRows[state.focusIndex].focus();
-  });
   window.addEventListener("hashchange", route);
   document.documentElement.dataset.theme = localStorage.getItem("bettr-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  loadProjectNavigation();
   pollStatus();
   setInterval(pollStatus, 4000);
 })();
