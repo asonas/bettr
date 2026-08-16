@@ -4,24 +4,26 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>bettr / supervisor view</title>
+    <title>bettr / Projects</title>
     <link rel="stylesheet" href="/app.css" />
   </head>
   <body>
     <a class="skip-link" href="#main">本文へ移動</a>
     <div class="app-shell">
       <aside class="sidebar" aria-label="メインナビゲーション">
-        <a class="brand" href="#/overview" aria-label="bettr Overview">
+        <a class="brand" href="#/projects" aria-label="bettr Projects">
           <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
           <span>bettr</span>
         </a>
-        <div class="sidebar-label">Supervision</div>
         <nav class="nav-list">
-          <a href="#/overview" data-nav="overview"><span class="nav-icon" aria-hidden="true">◌</span><span>Overview</span><kbd>G&nbsp;O</kbd></a>
           <a href="#/projects" data-nav="projects"><span class="nav-icon" aria-hidden="true">▦</span><span>Projects</span></a>
           <a href="#/recent" data-nav="recent"><span class="nav-icon" aria-hidden="true">◷</span><span>Recent</span></a>
-          <button type="button" class="nav-button" id="search-nav"><span class="nav-icon" aria-hidden="true">⌕</span><span>Search</span><kbd>/</kbd></button>
+          <button type="button" class="nav-button" id="search-nav"><span class="nav-icon" aria-hidden="true">⌕</span><span>Search</span></button>
         </nav>
+        <section class="project-nav" aria-label="Projects">
+          <div class="project-nav-label">Projects</div>
+          <div id="project-nav-list" class="project-nav-list" aria-live="polite"><span class="project-nav-state">Loading projects</span></div>
+        </section>
         <div class="sidebar-spacer"></div>
         <div class="connection-state" id="connection-state" aria-live="polite">
           <span class="connection-dot" aria-hidden="true"></span>
@@ -32,7 +34,7 @@
 
       <div class="workspace">
         <header class="topbar">
-          <div class="breadcrumbs" id="breadcrumbs"><span>Overview</span></div>
+          <div class="breadcrumbs" id="breadcrumbs"><span>Projects</span></div>
           <div class="topbar-actions">
             <span class="sync-label" id="sync-label">確認中</span>
             <button class="icon-button" type="button" id="theme-toggle" aria-label="テーマを切り替え">◐</button>
@@ -41,8 +43,8 @@
 
         <div class="update-banner" id="update-banner" role="status" aria-live="polite" hidden>
           <span class="update-signal" aria-hidden="true"></span>
-          <span id="update-message">新しい更新があります</span>
-          <button type="button" id="apply-update">更新を表示</button>
+          <span id="update-message">Issues updated</span>
+          <button type="button" id="apply-update">Dismiss</button>
         </div>
 
         <main id="main" class="main-content" tabindex="-1">
@@ -52,6 +54,7 @@
         </main>
       </div>
     </div>
+    <script src="/state.js" defer></script>
     <script src="/app.js" defer></script>
   </body>
 </html>

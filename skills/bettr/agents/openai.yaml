@@ -1,4 +1,4 @@
 interface:
   display_name: "Bettr Issue Tracking"
   short_description: "Record agent work in local bettr Issues"
-  default_prompt: "Use $bettr to record this agent work in a bettr Issue."
+  default_prompt: "Use $bettr to record material updates and review status for explicitly identified Issues; never infer the target Issue or create one automatically."

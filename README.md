@@ -164,6 +164,10 @@ python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-githu
   --repo asonas/bettr --path skills/bettr --ref main
 ```
 
+### Conversation updates
+
+When a conversation explicitly identifies a bettr Issue, the skill records a material decision, requirement change, discovery, risk, blocker, next action, or verification result as a comment before the response. It never infers an Issue number or creates an Issue. When evidence is unambiguous, it can also move `todo` to `in_progress`, `in_progress` to `blocked`, or `in_progress` to `done`; it never automatically cancels an Issue. Duplicate, ambiguous, unrelated, and updates to completed Issues are skipped. Users can explicitly opt out of recording an update.
+
 ## Implemented scope
 
 Phase 1 provides projects, priorities (`critical`, `high`, `medium`, and `low`), five Issue states (`todo`, `in_progress`, `blocked`, `done`, and `cancelled`), immutable comments, revision-guarded edits, history, cross-project status, execution context, and SQLite audit events.

@@ -137,6 +137,7 @@ fn web_serves_status_and_embedded_assets() {
     assert!(body.contains("id=\"main\""));
     assert!(body.contains("aria-live=\"polite\""));
     assert!(body.contains("id=\"update-banner\""));
+    assert!(body.contains("id=\"project-nav-list\""));
 
     let (status, body) = server.get("/app.css");
     assert_eq!(status, 200);
@@ -148,9 +149,75 @@ fn web_serves_status_and_embedded_assets() {
     let (status, body) = server.get("/app.js");
     assert_eq!(status, 200);
     assert!(body.contains("api/status"));
-    assert!(body.contains("新しい更新があります"));
+    assert!(body.contains("updatedIssues"));
     assert!(body.contains("event.context"));
-    assert!(body.contains("event.key.toLowerCase()"));
+    assert!(body.contains("applyStatusUpdate"));
+
+    let (status, body) = server.get("/state.js");
+    assert_eq!(status, 200);
+    assert!(body.contains("changedIssueKeys"));
+}
+
+#[test]
+fn web_status_polling_marks_changed_cards_without_overlapping_requests() {
+    let app_js = include_str!("../src/web/app.js");
+
+    assert!(app_js.contains("let statusPollInFlight = false;"));
+    assert!(app_js.contains("if (statusPollInFlight) return;"));
+    assert!(app_js.contains("applyStatusUpdate"));
+    assert!(app_js.contains("state.updatedIssues = update.updatedIssues"));
+    assert!(!app_js.contains("state.pending"));
+}
+
+#[test]
+fn web_activity_does_not_render_an_empty_state_transition() {
+    let app_js = include_str!("../src/web/app.js");
+
+    assert!(app_js.contains("case \"issue_created\":"));
+    assert!(app_js.contains("Issue created"));
+    assert!(app_js.contains("Change recorded"));
+}
+
+#[test]
+fn web_page_headings_use_readable_tracking() {
+    let app_css = include_str!("../src/web/app.css");
+
+    assert!(app_css.contains("font-weight: 720; letter-spacing: -.02em; line-height: 1.1;"));
+    assert!(!app_css.contains("letter-spacing: -.045em"));
+}
+
+#[test]
+fn web_does_not_advertise_or_handle_keyboard_shortcuts() {
+    let index_html = include_str!("../src/web/index.html");
+    let app_css = include_str!("../src/web/app.css");
+    let app_js = include_str!("../src/web/app.js");
+
+    assert!(!index_html.contains("<kbd>"));
+    assert!(!index_html.contains("Supervision"));
+    assert!(!app_css.contains(".nav-list kbd"));
+    assert!(!app_js.contains("document.addEventListener(\"keydown\""));
+    assert!(!app_js.contains("goPending"));
+}
+
+#[test]
+fn web_projects_are_a_sidebar_kanban_with_update_indicators() {
+    let index_html = include_str!("../src/web/index.html");
+    let app_css = include_str!("../src/web/app.css");
+    let app_js = include_str!("../src/web/app.js");
+    let state_js = include_str!("../src/web/state.js");
+
+    assert!(index_html.contains("id=\"project-nav-list\""));
+    assert!(!index_html.contains("#/overview"));
+    assert!(!app_js.contains("project-filter"));
+    assert!(app_js.contains("renderProjects(project = \"\")"));
+    assert!(app_js.contains("kanban-board"));
+    assert!(app_js.contains("updatedIssues"));
+    assert!(app_js.contains("focusedCard"));
+    assert!(app_js.contains("projectNavInFlight"));
+    assert!(app_js.contains("aria-label=\"Project ${name}\""));
+    assert!(state_js.contains("changedIssueKeys"));
+    assert!(app_css.contains(".kanban-board"));
+    assert!(app_css.contains(".kanban-card.is-updated"));
 }
 
 #[test]

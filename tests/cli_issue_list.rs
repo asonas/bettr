@@ -420,6 +420,51 @@ fn issue_list_orders_state_rank_before_priority() {
 }
 
 #[test]
+fn issue_list_places_completed_states_after_active_states() {
+    let app = crate::support::TestApp::new();
+    app.command().arg("init").assert().success();
+    create_project(&app, "alpha");
+
+    let done = create_issue(&app, "alpha", "Done", None, Some("high"));
+    let cancelled = create_issue(&app, "alpha", "Cancelled", None, Some("high"));
+    let todo = create_issue(&app, "alpha", "Todo", None, Some("high"));
+    let progress = create_issue(&app, "alpha", "In progress", None, Some("high"));
+    let blocked = create_issue(&app, "alpha", "Blocked", None, Some("high"));
+    for (issue, state) in [
+        (&done, "done"),
+        (&cancelled, "cancelled"),
+        (&todo, "todo"),
+        (&progress, "in_progress"),
+        (&blocked, "blocked"),
+    ] {
+        set_issue_fields(
+            &app,
+            issue,
+            state,
+            None,
+            "2026-08-15T00:00:00Z",
+            "2026-08-15T00:00:00Z",
+        );
+    }
+
+    let output = app
+        .command()
+        .args([
+            "issue",
+            "list",
+            "--all-projects",
+            "--include-completed",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        titles(&json_data(&output)),
+        ["Blocked", "In progress", "Todo", "Done", "Cancelled"]
+    );
+}
+
+#[test]
 fn issue_list_orders_priority_before_creation_time() {
     let app = crate::support::TestApp::new();
     app.command().arg("init").assert().success();
