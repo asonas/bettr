@@ -3,6 +3,47 @@ mod support;
 use predicates::prelude::*;
 use std::os::unix::fs::MetadataExt;
 
+fn sqlite_sidecar(path: &std::path::Path, suffix: &str) -> std::path::PathBuf {
+    let mut sidecar = path.as_os_str().to_owned();
+    sidecar.push(suffix);
+    sidecar.into()
+}
+
+fn directory_entries(path: &std::path::Path) -> Vec<std::ffi::OsString> {
+    let mut entries = std::fs::read_dir(path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    entries.sort();
+    entries
+}
+
+fn assert_project_list_rejected_without_file_changes(
+    app: &crate::support::TestApp,
+    expected_bytes: &[u8],
+    private_contents: &str,
+) {
+    let expected_directory_entries = directory_entries(app.dir.path());
+    let output = app
+        .command()
+        .args(["project", "list", "--json"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("database_not_initialized"));
+    assert!(!stderr.contains(private_contents));
+    assert_eq!(std::fs::read(&app.database).unwrap(), expected_bytes);
+    assert_eq!(
+        directory_entries(app.dir.path()),
+        expected_directory_entries
+    );
+    for suffix in ["-wal", "-shm", "-journal"] {
+        assert!(!sqlite_sidecar(&app.database, suffix).exists());
+    }
+}
+
 #[test]
 fn init_creates_a_version_one_database_once() {
     let app = crate::support::TestApp::new();
@@ -130,13 +171,14 @@ fn init_does_not_modify_a_non_bettr_database_with_similar_table_names() {
 }
 
 #[test]
-fn project_list_does_not_modify_a_non_bettr_database() {
+fn project_list_rejects_a_database_with_the_wrong_application_id_without_side_effects() {
     let app = crate::support::TestApp::new();
     let connection = rusqlite::Connection::open(&app.database).unwrap();
     connection
         .execute_batch(
             "CREATE TABLE projects (sentinel TEXT);\n\
              INSERT INTO projects VALUES ('keep-me');\n\
+             PRAGMA application_id = 305419896;\n\
              PRAGMA user_version = 1;",
         )
         .unwrap();
@@ -160,15 +202,8 @@ fn project_list_does_not_modify_a_non_bettr_database() {
     drop(connection);
     let bytes = std::fs::read(&app.database).unwrap();
 
-    app.command()
-        .args(["project", "list", "--json"])
-        .assert()
-        .code(3)
-        .stderr(predicate::str::contains("database_not_initialized"));
+    assert_project_list_rejected_without_file_changes(&app, &bytes, "keep-me");
 
-    assert_eq!(std::fs::read(&app.database).unwrap(), bytes);
-    assert!(!app.database.with_extension("db-wal").exists());
-    assert!(!app.database.with_extension("db-shm").exists());
     let connection = rusqlite::Connection::open_with_flags(
         &app.database,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -198,6 +233,116 @@ fn project_list_does_not_modify_a_non_bettr_database() {
             .unwrap(),
         data
     );
+}
+
+#[test]
+fn project_list_does_not_touch_a_non_bettr_wal_database() {
+    let app = crate::support::TestApp::new();
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA journal_mode = WAL;
+             CREATE TABLE sentinel (value TEXT NOT NULL);
+             INSERT INTO sentinel VALUES ('keep-me');
+             PRAGMA wal_checkpoint(TRUNCATE);",
+        )
+        .unwrap();
+    let journal_mode = connection
+        .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+        .unwrap();
+    let schema = connection
+        .prepare("SELECT name, sql FROM sqlite_schema ORDER BY name")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let data = connection
+        .query_row("SELECT value FROM sentinel", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .unwrap();
+    drop(connection);
+
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let sidecar = sqlite_sidecar(&app.database, suffix);
+        match std::fs::remove_file(sidecar) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("failed to remove SQLite sidecar: {error}"),
+        }
+    }
+    let bytes = std::fs::read(&app.database).unwrap();
+
+    assert_project_list_rejected_without_file_changes(&app, &bytes, "keep-me");
+
+    let connection = rusqlite::Connection::open_with_flags(
+        &app.database,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+            .unwrap(),
+        journal_mode
+    );
+    let after_schema = connection
+        .prepare("SELECT name, sql FROM sqlite_schema ORDER BY name")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(after_schema, schema);
+    assert_eq!(
+        connection
+            .query_row("SELECT value FROM sentinel", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap(),
+        data
+    );
+}
+
+#[test]
+fn project_list_rejects_a_short_database_file_without_side_effects() {
+    let app = crate::support::TestApp::new();
+    let bytes = b"SQLite format 3\0private short file";
+    std::fs::write(&app.database, bytes).unwrap();
+
+    assert_project_list_rejected_without_file_changes(&app, bytes, "private short file");
+}
+
+#[test]
+fn project_list_rejects_a_non_sqlite_file_without_side_effects() {
+    let app = crate::support::TestApp::new();
+    let mut bytes = vec![0_u8; 100];
+    bytes[..25].copy_from_slice(b"private database contents");
+    std::fs::write(&app.database, &bytes).unwrap();
+
+    assert_project_list_rejected_without_file_changes(&app, &bytes, "private database contents");
+}
+
+#[test]
+fn project_list_accepts_a_valid_bettr_database() {
+    let app = crate::support::TestApp::new();
+    app.command().arg("init").assert().success();
+
+    let output = app
+        .command()
+        .args(["project", "list", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response["schema_version"], 1);
+    assert_eq!(response["data"], serde_json::json!([]));
 }
 
 #[test]

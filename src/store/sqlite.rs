@@ -2,7 +2,39 @@ pub struct Database {
     connection: rusqlite::Connection,
 }
 
-const BETTR_APPLICATION_ID: i64 = 0x4254_5452;
+const BETTR_APPLICATION_ID: u32 = 0x4254_5452;
+const BETTR_SCHEMA_VERSION: u32 = 1;
+
+struct DatabaseIdentity {
+    application_id: u32,
+    user_version: u32,
+}
+
+impl DatabaseIdentity {
+    fn is_current_bettr(&self) -> bool {
+        self.application_id == BETTR_APPLICATION_ID && self.user_version == BETTR_SCHEMA_VERSION
+    }
+}
+
+fn read_sqlite_header_identity(
+    path: &std::path::Path,
+) -> Result<DatabaseIdentity, crate::error::AppError> {
+    use std::io::Read as _;
+
+    let mut header = [0_u8; 100];
+    let mut file =
+        std::fs::File::open(path).map_err(|_| crate::error::AppError::DatabaseNotInitialized)?;
+    file.read_exact(&mut header)
+        .map_err(|_| crate::error::AppError::DatabaseNotInitialized)?;
+    if &header[..16] != b"SQLite format 3\0" {
+        return Err(crate::error::AppError::DatabaseNotInitialized);
+    }
+
+    Ok(DatabaseIdentity {
+        user_version: u32::from_be_bytes(header[60..64].try_into().unwrap()),
+        application_id: u32::from_be_bytes(header[68..72].try_into().unwrap()),
+    })
+}
 
 struct AuditInsert<'a> {
     operation: &'a str,
@@ -99,10 +131,7 @@ impl Database {
     }
 
     pub fn open(path: &std::path::Path) -> Result<Self, crate::error::AppError> {
-        if !path.is_file() {
-            return Err(crate::error::AppError::DatabaseNotInitialized);
-        }
-        if !Self::is_initialized_database(path)? {
+        if !read_sqlite_header_identity(path)?.is_current_bettr() {
             return Err(crate::error::AppError::DatabaseNotInitialized);
         }
 
@@ -1378,15 +1407,33 @@ impl Database {
     }
 
     fn open_verified(path: &std::path::Path) -> Result<Self, crate::error::AppError> {
-        Self::open_read_write(path)
+        let connection = Self::open_read_write_connection(path)?;
+        if !Self::connection_identity(&connection)?.is_current_bettr() {
+            return Err(crate::error::AppError::DatabaseNotInitialized);
+        }
+
+        Self::configure_connection(connection)
     }
 
     fn open_read_write(path: &std::path::Path) -> Result<Self, crate::error::AppError> {
+        let connection = Self::open_read_write_connection(path)?;
+        Self::configure_connection(connection)
+    }
+
+    fn open_read_write_connection(
+        path: &std::path::Path,
+    ) -> Result<rusqlite::Connection, crate::error::AppError> {
         let connection = rusqlite::Connection::open_with_flags(
             path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
         )
         .map_err(crate::error::AppError::from)?;
+        Ok(connection)
+    }
+
+    fn configure_connection(
+        connection: rusqlite::Connection,
+    ) -> Result<Self, crate::error::AppError> {
         connection
             .busy_timeout(std::time::Duration::from_secs(5))
             .map_err(crate::error::AppError::from)?;
@@ -1398,17 +1445,25 @@ impl Database {
     }
 
     fn is_initialized_database(path: &std::path::Path) -> Result<bool, crate::error::AppError> {
-        let connection =
-            rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-                .map_err(crate::error::AppError::from)?;
-        let version = connection
+        Ok(read_sqlite_header_identity(path)?.is_current_bettr())
+    }
+
+    fn connection_identity(
+        connection: &rusqlite::Connection,
+    ) -> Result<DatabaseIdentity, crate::error::AppError> {
+        let user_version = connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .map_err(crate::error::AppError::from)?;
         let application_id = connection
             .pragma_query_value(None, "application_id", |row| row.get::<_, i64>(0))
             .map_err(crate::error::AppError::from)?;
 
-        Ok(version == 1 && application_id == BETTR_APPLICATION_ID)
+        Ok(DatabaseIdentity {
+            application_id: u32::try_from(application_id)
+                .map_err(|_| crate::error::AppError::DatabaseNotInitialized)?,
+            user_version: u32::try_from(user_version)
+                .map_err(|_| crate::error::AppError::DatabaseNotInitialized)?,
+        })
     }
 
     fn initialize_schema(
