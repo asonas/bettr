@@ -1555,7 +1555,6 @@ impl Database {
             .map_err(crate::error::AppError::from)?;
         let applied = crate::store::migrations::apply_pending(
             &transaction,
-            current_version,
             crate::store::migrations::migrations(),
         )
         .map_err(crate::error::AppError::from)?;

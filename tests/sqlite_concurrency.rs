@@ -226,6 +226,16 @@ fn initialized_issue() -> crate::support::TestApp {
     app
 }
 
+fn downgrade_to_schema_version_one(app: &crate::support::TestApp) {
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    connection
+        .execute_batch(
+            "DROP TABLE IF EXISTS schema_migrations;\n\
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+}
+
 fn context() -> crate::domain::ExecutionContext {
     crate::domain::ExecutionContext {
         kind: crate::domain::InitiatorKind::Human,
@@ -686,4 +696,75 @@ fn concurrent_issue_and_comment_processes_preserve_database_integrity() {
             "unexpected successful audit count for {operation}"
         );
     }
+}
+
+#[test]
+fn concurrent_database_opens_apply_schema_migration_once() {
+    let app = initialized_project();
+    downgrade_to_schema_version_one(&app);
+
+    let gate = StartGate::new();
+    let mut processes = Vec::new();
+    for _ in 0..2 {
+        processes.push(GatedBettr::start(
+            &app.database,
+            &["project".to_owned(), "list".to_owned(), "--json".to_owned()],
+            &gate,
+        ));
+    }
+    gate.open(processes.len());
+    for process in processes {
+        process.wait();
+    }
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 2",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM audit_events
+                 WHERE operation = 'schema_migrate' AND success = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    let integrity: String = connection
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    let foreign_key_violations = connection
+        .prepare("PRAGMA foreign_key_check")
+        .unwrap()
+        .query_map([], |_| Ok(()))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(foreign_key_violations.is_empty());
 }

@@ -22,13 +22,14 @@ pub(crate) fn migrations() -> &'static [Migration] {
 
 pub(crate) fn apply_pending(
     transaction: &rusqlite::Transaction<'_>,
-    current_version: u32,
     migrations: &[Migration],
 ) -> Result<Vec<Migration>, rusqlite::Error> {
+    let current_version: i64 =
+        transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
     let mut applied = Vec::new();
     for migration in migrations
         .iter()
-        .filter(|migration| migration.version > current_version)
+        .filter(|migration| i64::from(migration.version) > current_version)
     {
         (migration.apply)(transaction)?;
         transaction.execute(
@@ -92,7 +93,7 @@ mod tests {
             let transaction = connection
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .unwrap();
-            assert!(super::apply_pending(&transaction, 1, &[migration]).is_err());
+            assert!(super::apply_pending(&transaction, &[migration]).is_err());
         }
 
         assert_eq!(
@@ -119,5 +120,27 @@ mod tests {
         assert!(super::is_supported_version(1));
         assert!(super::is_supported_version(2));
         assert!(!super::is_supported_version(3));
+    }
+
+    #[test]
+    fn a_second_transaction_rechecks_the_schema_version_after_another_migration_commits() {
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection.pragma_update(None, "user_version", 1).unwrap();
+
+        {
+            let transaction = connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .unwrap();
+            let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
+            assert_eq!(applied.len(), 1);
+            transaction.commit().unwrap();
+        }
+
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
+        assert!(applied.is_empty());
+        transaction.commit().unwrap();
     }
 }
