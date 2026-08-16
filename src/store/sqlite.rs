@@ -706,6 +706,30 @@ impl Database {
             ));
         }
 
+        let lease_owner = match transaction.query_row(
+            "SELECT agent, session_id FROM issue_leases WHERE issue_id = ?1",
+            [issue.id.to_string()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        ) {
+            Ok(owner) => Some(owner),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(error) => return Err(crate::error::AppError::from(error)),
+        };
+        if let Some((lease_agent, lease_session_id)) = lease_owner {
+            let (agent, session_id) = Self::agent_session(context)?;
+            if lease_agent != agent || lease_session_id != session_id {
+                return Err(crate::error::AppError::Conflict(
+                    "lease is owned by another agent session".to_owned(),
+                ));
+            }
+            transaction
+                .execute(
+                    "DELETE FROM issue_leases WHERE issue_id = ?1 AND agent = ?2 AND session_id = ?3",
+                    rusqlite::params![issue.id.to_string(), agent, session_id],
+                )
+                .map_err(crate::error::AppError::from)?;
+        }
+
         let now = chrono::Utc::now();
         let request_id = uuid::Uuid::new_v4();
         let updated_revision = issue.revision + 1;
@@ -830,6 +854,11 @@ impl Database {
         if request.status != "open" {
             return Err(crate::error::AppError::Conflict(
                 "decision request is already resolved".to_owned(),
+            ));
+        }
+        if context.kind != crate::domain::InitiatorKind::Human {
+            return Err(crate::error::AppError::Conflict(
+                "decision requests must be resolved by a human".to_owned(),
             ));
         }
         if context.kind == crate::domain::InitiatorKind::Agent
@@ -1218,6 +1247,18 @@ impl Database {
         if child_has_parent {
             return Err(crate::error::AppError::Conflict(
                 "Issue already has a parent".to_owned(),
+            ));
+        }
+        let child_has_children = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM issue_parents WHERE parent_issue_id = ?1)",
+                [child_issue.id.to_string()],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(crate::error::AppError::from)?;
+        if child_has_children {
+            return Err(crate::error::AppError::Conflict(
+                "parent nesting is limited to one level".to_owned(),
             ));
         }
         let parent_has_parent = transaction

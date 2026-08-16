@@ -164,6 +164,108 @@ fn decision_requests_block_issue_and_resolve_with_human_context() {
 }
 
 #[test]
+fn decision_resolution_releases_the_requester_lease_for_reclaim() {
+    let app = initialized_app();
+
+    app.command()
+        .env("BETTR_AGENT", "codex")
+        .env("BETTR_SESSION_ID", "session-a")
+        .args(["issue", "claim", "1", "--project", "bettr", "--json"])
+        .assert()
+        .success();
+
+    let request = app
+        .command()
+        .env("BETTR_AGENT", "codex")
+        .env("BETTR_SESSION_ID", "session-a")
+        .args([
+            "decision",
+            "request",
+            "1",
+            "--project",
+            "bettr",
+            "--question",
+            "Which parser should we use?",
+            "--background",
+            "The current parser cannot handle this input.",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let request = json_data(&request);
+    let request_id = request["id"].as_str().unwrap();
+
+    app.command()
+        .env("BETTR_OPERATOR", "reviewer")
+        .args([
+            "decision",
+            "resolve",
+            request_id,
+            "--answer",
+            "Use the streaming parser.",
+            "--next-state",
+            "todo",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let reclaimed = app
+        .command()
+        .env("BETTR_AGENT", "worker")
+        .env("BETTR_SESSION_ID", "session-b")
+        .args(["issue", "claim", "1", "--project", "bettr", "--json"])
+        .output()
+        .unwrap();
+    let reclaimed = json_data(&reclaimed);
+    assert_eq!(reclaimed["issue"]["state"], "in_progress");
+    assert_eq!(reclaimed["lease"]["session_id"], "session-b");
+}
+
+#[test]
+fn decision_resolution_requires_human_context() {
+    let app = initialized_app();
+
+    let request = app
+        .command()
+        .env("BETTR_AGENT", "codex")
+        .env("BETTR_SESSION_ID", "session-a")
+        .args([
+            "decision",
+            "request",
+            "1",
+            "--project",
+            "bettr",
+            "--question",
+            "Which parser should we use?",
+            "--background",
+            "The current parser cannot handle this input.",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let request = json_data(&request);
+    let request_id = request["id"].as_str().unwrap();
+
+    app.command()
+        .env("BETTR_AGENT", "another-agent")
+        .env("BETTR_SESSION_ID", "session-b")
+        .args([
+            "decision",
+            "resolve",
+            request_id,
+            "--answer",
+            "Use the streaming parser.",
+            "--next-state",
+            "todo",
+            "--json",
+        ])
+        .assert()
+        .code(4)
+        .stderr(predicates::str::contains("human"));
+}
+
+#[test]
 fn decision_requests_validate_input_and_keep_unresolved_requests_from_done() {
     let app = initialized_app();
 

@@ -106,6 +106,12 @@ fn parent_commands_enforce_one_level_and_one_parent() {
     assert_eq!(parents[0]["parent"], "alpha#1");
 
     app.command()
+        .args(["issue", "parent", "set", "alpha#1", "beta#2", "--json"])
+        .assert()
+        .code(4)
+        .stderr(predicates::str::contains("conflict"));
+
+    app.command()
         .args(["issue", "parent", "set", "beta#2", "beta#1", "--json"])
         .assert()
         .code(4)

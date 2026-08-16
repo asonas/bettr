@@ -151,7 +151,7 @@ The SQLite database schema version is independent from the JSON response `schema
     "message": "database schema version 99 is unsupported; current version is 3",
     "details": {
       "found_version": 99,
-      "current_version": 2
+      "current_version": 3
     }
   }
 }
