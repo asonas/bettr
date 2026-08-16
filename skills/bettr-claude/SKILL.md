@@ -59,6 +59,8 @@ BETTR_OPERATOR=reviewer bettr decision resolve <request-uuid> \
 
 Open requests appear in `status` as `attention` and block completion. Do not bypass them by writing state directly.
 
+Resolve decisions to `todo`, `blocked`, `done`, or `cancelled`; do not select `in_progress`, because active work must be re-entered through an agent claim and lease.
+
 ## Revision conflicts and event polling
 
 Read the Issue immediately before a revision-guarded write. If a write returns a revision conflict, reread and reconcile the intervening change; never retry the old revision blindly. If a write's outcome is unknown, inspect `issue show`, `issue history`, and `audit list` before repeating it.

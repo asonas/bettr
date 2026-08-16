@@ -371,6 +371,14 @@ impl Database {
                 })?;
             return Err(crate::error::AppError::RevisionConflict { current_revision });
         }
+        if target_state != crate::domain::IssueState::InProgress {
+            transaction
+                .execute(
+                    "DELETE FROM issue_leases WHERE issue_id = ?1",
+                    [issue.id.to_string()],
+                )
+                .map_err(crate::error::AppError::from)?;
+        }
 
         let mut updated_issue = issue.clone();
         updated_issue.state = target_state;
@@ -856,11 +864,6 @@ impl Database {
                 "decision request is already resolved".to_owned(),
             ));
         }
-        if context.kind != crate::domain::InitiatorKind::Human {
-            return Err(crate::error::AppError::Conflict(
-                "decision requests must be resolved by a human".to_owned(),
-            ));
-        }
         if context.kind == crate::domain::InitiatorKind::Agent
             && request.requester_kind == Some(crate::domain::InitiatorKind::Agent)
             && request.requester_name == context.agent
@@ -868,6 +871,17 @@ impl Database {
         {
             return Err(crate::error::AppError::Conflict(
                 "the requesting agent session cannot resolve its own decision request".to_owned(),
+            ));
+        }
+        if context.kind != crate::domain::InitiatorKind::Human {
+            return Err(crate::error::AppError::Conflict(
+                "decision requests must be resolved by a human".to_owned(),
+            ));
+        }
+        if next_state == crate::domain::IssueState::InProgress {
+            return Err(crate::error::AppError::Conflict(
+                "decision resolution cannot enter in_progress without a lease; use todo and claim the Issue"
+                    .to_owned(),
             ));
         }
         let (issue_id, project_id, issue_number) = transaction
@@ -1636,7 +1650,7 @@ impl Database {
         let updated = transaction
             .execute(
                 "UPDATE issues
-                 SET assignee_kind = 'agent', assignee_name = ?1,
+                 SET state = 'in_progress', assignee_kind = 'agent', assignee_name = ?1,
                      revision = revision + 1, updated_at = ?2
                  WHERE id = ?3 AND revision = ?4",
                 rusqlite::params![
@@ -1673,6 +1687,7 @@ impl Database {
             )
             .map_err(crate::error::AppError::from)?;
         let mut updated_issue = issue.clone();
+        updated_issue.state = crate::domain::IssueState::InProgress;
         updated_issue.assignee_kind = Some(crate::domain::AssigneeKind::Agent);
         updated_issue.assignee_name = Some(agent.to_owned());
         updated_issue.revision += 1;
@@ -1711,7 +1726,7 @@ impl Database {
                 revision: Some(updated_issue.revision),
                 started_at: now,
                 exit_code: 0,
-                changed_fields: &["assignee_kind", "assignee_name"],
+                changed_fields: &["state", "assignee_kind", "assignee_name"],
                 metadata_json: &audit_metadata,
             },
         )?;
@@ -2369,7 +2384,7 @@ impl Database {
             "issue_parent_list" => &[],
             "issue_claim" => &["state", "assignee_kind", "assignee_name"],
             "issue_heartbeat" => &[],
-            "issue_takeover" => &["assignee_kind", "assignee_name"],
+            "issue_takeover" => &["state", "assignee_kind", "assignee_name"],
             "decision_request" => &["state", "decision_request"],
             "decision_resolve" => &["decision", "state"],
             "issue_start" | "issue_resume" => &["state"],
@@ -2815,7 +2830,7 @@ impl Database {
             "issue_dependency_added" | "issue_dependency_removed" => vec!["dependencies"],
             "issue_parent_set" => vec!["parent"],
             "issue_claimed" => vec!["state", "assignee_kind", "assignee_name"],
-            "issue_taken_over" => vec!["assignee_kind", "assignee_name"],
+            "issue_taken_over" => vec!["state", "assignee_kind", "assignee_name"],
             "decision_requested" => vec!["state", "decision_request"],
             "decision_resolved" => vec!["decision", "state"],
             _ => Vec::new(),

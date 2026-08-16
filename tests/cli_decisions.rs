@@ -266,6 +266,48 @@ fn decision_resolution_requires_human_context() {
 }
 
 #[test]
+fn decision_resolution_rejects_in_progress_without_a_lease() {
+    let app = initialized_app();
+
+    let request = app
+        .command()
+        .env("BETTR_AGENT", "codex")
+        .env("BETTR_SESSION_ID", "session-a")
+        .args([
+            "decision",
+            "request",
+            "1",
+            "--project",
+            "bettr",
+            "--question",
+            "Which parser should we use?",
+            "--background",
+            "The current parser cannot handle this input.",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let request = json_data(&request);
+    let request_id = request["id"].as_str().unwrap();
+
+    app.command()
+        .env("BETTR_OPERATOR", "reviewer")
+        .args([
+            "decision",
+            "resolve",
+            request_id,
+            "--answer",
+            "Use the streaming parser.",
+            "--next-state",
+            "in_progress",
+            "--json",
+        ])
+        .assert()
+        .code(4)
+        .stderr(predicates::str::contains("lease"));
+}
+
+#[test]
 fn decision_requests_validate_input_and_keep_unresolved_requests_from_done() {
     let app = initialized_app();
 

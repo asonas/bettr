@@ -137,6 +137,8 @@ bettr issue parent set bettr#12 bettr#3 --json
 
 When an agent needs a human choice, create a decision request and stop work on that Issue. A resolver records the answer and explicit next state:
 
+Use `todo` when the Issue needs to return to agent work; active `in_progress` state is entered through a new claim and lease.
+
 ```sh
 bettr decision request 12 --project bettr \
   --question "Which behavior is intended?" \

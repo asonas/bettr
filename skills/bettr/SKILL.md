@@ -128,6 +128,8 @@ BETTR_OPERATOR=reviewer bettr decision resolve <request-uuid> \
 
 An open human decision keeps the Issue in the supervisor's `attention` view and prevents completion. Do not continue by editing around that constraint.
 
+Resolve decisions to `todo`, `blocked`, `done`, or `cancelled`; do not select `in_progress`, because active work must be re-entered through an agent claim and lease.
+
 ## Revisions, completion, and polling
 
 Fetch the current Issue before every revision-guarded edit or transition:
