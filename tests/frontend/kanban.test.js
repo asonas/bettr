@@ -1,4 +1,4 @@
-import { getByRole, getByText, queryByRole, within } from "@testing-library/dom";
+import { getByRole, queryByRole, within } from "@testing-library/dom";
 import { describe, expect, it, vi } from "vitest";
 
 import { createWebController } from "../../src/web/app.js";
@@ -21,7 +21,11 @@ describe("Kanban board", () => {
     const done = getByRole(document, "heading", { name: "Done" }).closest(".kanban-column");
     expect(queryByRole(inProgress, "button", { name: /Ship the board/ })).toBeNull();
     expect(within(done).getByRole("button", { name: /Ship the board/ })).toBeTruthy();
-    expect(getByText(document, "Updated")).toBeTruthy();
-    expect(document.querySelector("#update-banner").hidden).toBe(false);
+    const updatedCard = within(done).getByRole("button", { name: /Ship the board/ });
+    expect(updatedCard.classList.contains("is-updated")).toBe(true);
+    expect(updatedCard.dataset.updated).toBe("true");
+    expect(updatedCard.querySelector(".sr-only").textContent).toBe("Updated");
+    expect(updatedCard.querySelector(".update-indicator")).toBeNull();
+    expect(document.querySelector("#update-banner")).toBeNull();
   });
 });

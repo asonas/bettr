@@ -36,8 +36,8 @@ describe("project navigation", () => {
     await controller.loadProjectNavigation();
     const link = getByRole(document, "link", { name: "Project bettr" });
     expect(link).toBeTruthy();
-    expect(link.querySelector(".project-nav-dot").textContent).toBe("B1");
-    expect(getByRole(document, "link", { name: "Project beacon" }).querySelector(".project-nav-dot").textContent).toBe("B2");
+    expect(link.querySelector(".project-nav-dot")).toBeNull();
+    expect(getByRole(document, "link", { name: "Project beacon" }).querySelector(".project-nav-dot")).toBeNull();
 
     await controller.loadProjectNavigation();
     expect(getByRole(document, "link", { name: "Project bettr" })).toBeTruthy();

@@ -136,7 +136,9 @@ fn web_serves_status_and_embedded_assets() {
     assert!(body.contains("skip-link"));
     assert!(body.contains("id=\"main\""));
     assert!(body.contains("aria-live=\"polite\""));
-    assert!(body.contains("id=\"update-banner\""));
+    assert!(body.contains("id=\"updated-nav\""));
+    assert!(body.contains("id=\"updated-menu\""));
+    assert!(!body.contains("id=\"update-banner\""));
     assert!(body.contains("id=\"project-nav-list\""));
     assert!(body.contains("<script type=\"module\" src=\"/app.js\"></script>"));
 

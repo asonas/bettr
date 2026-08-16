@@ -80,7 +80,8 @@ Done, and Cancelled. The sidebar lists projects directly; selecting one
 filters the board and selecting a card opens a URL-addressable detail view
 with its activity and properties. The browser polls the local read API,
 moves changed Issues to their current status column, and marks updated cards
-until they are opened. The CLI remains the only mutation path.
+with a cyan edge until they are opened. The header exposes a compact dropdown
+for reviewing those updated Issues. The CLI remains the only mutation path.
 
 The production server still serves embedded HTML, CSS, and Vanilla JavaScript
 assets and has no frontend runtime dependency. Frontend behavior is tested

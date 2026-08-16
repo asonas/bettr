@@ -23,9 +23,10 @@ const status = {
 function mountShell() {
   document.body.innerHTML = `
     <main id="main"><div id="app"></div></main>
-    <div id="update-banner" hidden><span id="update-message"></span><button id="apply-update"></button></div>
     <span id="sync-label"></span><span id="breadcrumbs"></span>
     <div id="connection-state"></div><div id="project-nav-list"></div>
+    <button id="updated-nav" type="button" aria-label="Updated Issues" aria-expanded="false"><span id="updated-count"></span></button>
+    <div id="updated-menu" role="menu" aria-label="Updated Issues" hidden></div>
     <button id="search-nav"></button><button id="theme-toggle"></button>
   `;
 }
