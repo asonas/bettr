@@ -33,11 +33,11 @@
 - `npm run test:frontend:watch` runs Vitest watch mode.
 - Vitest uses jsdom and loads `tests/frontend/setup.js` before tests.
 
-- [ ] Write a smoke test importing the existing state module and asserting the five Kanban columns.
-- [ ] Run `npm test -- --run tests/frontend/smoke.test.js` and observe the missing package/test environment failure.
-- [ ] Add the package scripts, Vitest jsdom config, and setup file.
-- [ ] Run the smoke test and verify it passes.
-- [ ] Commit the frontend test runner scaffold.
+- [x] Write a smoke test importing the existing state module and asserting the five Kanban columns.
+- [x] Run `npm test -- --run tests/frontend/smoke.test.js` and observe the missing package/test environment failure.
+- [x] Add the package scripts, Vitest jsdom config, and setup file.
+- [x] Run the smoke test and verify it passes.
+- [x] Commit the frontend test runner scaffold.
 
 ### Task 2: Testable browser controller boundary
 
@@ -52,12 +52,12 @@
 - `src/web/app.js` exports `createWebController({ document, window, fetch, state })` for tests and calls `bootstrap()` only in the production browser entry.
 - The controller exposes `pollStatus()`, `route()`, and `renderKanban()` only through the returned test handle; production behavior remains unchanged.
 
-- [ ] Write a failing controller test that mounts the HTML shell, feeds a status response, and expects five named columns and an Issue card.
-- [ ] Run the focused test and verify it fails because `createWebController` is not exported.
-- [ ] Extract DOM references, rendering, routing, and polling dependencies into the controller factory without changing output behavior.
-- [ ] Keep the production entry compatible with Rust's embedded `/state.js` and `/app.js` routes.
-- [ ] Run the focused test and verify it passes.
-- [ ] Commit the controller boundary.
+- [x] Write a failing controller test that mounts the HTML shell, feeds a status response, and expects five named columns and an Issue card.
+- [x] Run the focused test and verify it fails because `createWebController` is not exported.
+- [x] Extract DOM references, rendering, routing, and polling dependencies into the controller factory without changing output behavior.
+- [x] Keep the production entry compatible with Rust's embedded `/state.js` and `/app.js` routes.
+- [x] Run the focused test and verify it passes.
+- [x] Commit the controller boundary.
 
 ### Task 3: Move browser behavior assertions to jsdom
 
@@ -65,18 +65,22 @@
 - Create: `tests/frontend/kanban.test.js`
 - Create: `tests/frontend/project-navigation.test.js`
 - Create: `tests/frontend/polling.test.js`
+- Create: `tests/frontend/detail.test.js`
+- Create: `tests/frontend/navigation.test.js`
+- Create: `tests/frontend/support.js`
+- Modify: `src/web/app.css`
 - Modify: `tests/web_api.rs`
 
 **Interfaces:**
 - Browser tests use `@testing-library/dom` queries and injected fetch responses.
 - Rust tests retain asset route/content-type, API schema, non-GET, unknown-route, and concurrent-read assertions.
 
-- [ ] Add failing tests for status-column order, updated-card indicator, automatic movement, navigation retry, and focus restoration.
-- [ ] Run the focused frontend tests and verify each fails for the expected missing behavior.
-- [ ] Implement only the controller changes needed to make the behavior tests pass.
-- [ ] Remove Rust source-string assertions that duplicate browser behavior; retain API/asset boundary assertions.
-- [ ] Run `npm test` and the focused Rust Web API suite.
-- [ ] Commit the browser behavior tests and Rust test boundary cleanup.
+- [x] Add failing tests for status-column order, updated-card indicator, automatic movement, navigation retry, and focus restoration.
+- [x] Run the focused frontend tests and verify each fails for the expected missing behavior.
+- [x] Implement only the controller changes needed to make the behavior tests pass.
+- [x] Remove Rust source-string assertions that duplicate browser behavior; retain API/asset boundary assertions.
+- [x] Run `npm test` and the focused Rust Web API suite.
+- [x] Commit the browser behavior tests and Rust test boundary cleanup.
 
 ### Task 4: Documentation and verification
 
@@ -85,8 +89,8 @@
 - Modify: `docs/design.md`
 - Modify: `docs/implementation-roadmap.md`
 
-- [ ] Document `npm install`, `npm test`, the jsdom test boundary, and the retained Rust Web API checks.
-- [ ] Run `npm test` and record the test count.
-- [ ] Run `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --tests`, and `cargo build --release`.
-- [ ] Run `git diff --check` and inspect the final diff against the spec.
-- [ ] Commit only the intended frontend environment, test, boundary, and documentation files.
+- [x] Document `npm install`, `npm test`, the jsdom test boundary, and the retained Rust Web API checks.
+- [x] Run `npm test` and record the test count.
+- [x] Run `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --tests`, and `cargo build --release`.
+- [x] Run `git diff --check` and inspect the final diff against the spec.
+- [x] Commit only the intended frontend environment, test, boundary, and documentation files.

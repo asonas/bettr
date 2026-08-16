@@ -198,6 +198,14 @@ export function createWebController({
     return body;
   }
 
+  function projectMark(name, projects, index) {
+    const letters = Array.from(name.trim());
+    const base = letters.slice(0, 2).join("").toUpperCase() || "•";
+    const matches = (project) => Array.from(project.name.trim()).slice(0, 2).join("").toUpperCase() === base;
+    const duplicateIndex = projects.slice(0, index).filter(matches).length;
+    return projects.filter(matches).length < 2 ? base : `${letters[0]?.toUpperCase() || "•"}${duplicateIndex + 1}`;
+  }
+
   async function loadProjectNavigation() {
     const list = document.querySelector("#project-nav-list");
     if (projectNavInFlight) return;
@@ -208,9 +216,10 @@ export function createWebController({
       if (nextSnapshot === projectNavSnapshot) return;
       const focusedProject = document.activeElement?.matches("[data-project-nav]") ? document.activeElement.dataset.projectNav : "";
       projectNavSnapshot = nextSnapshot;
-      list.innerHTML = projects.length ? projects.map((project) => {
+      list.innerHTML = projects.length ? projects.map((project, index) => {
         const name = escapeHtml(project.name);
-        return `<a class="project-nav-link" data-project-nav="${name}" aria-label="Project ${name}" title="${name}" href="#/projects/${escapeHtml(encodeURIComponent(project.name))}"><span class="project-nav-dot" aria-hidden="true"></span><span>${name}</span></a>`;
+        const initial = escapeHtml(projectMark(project.name, projects, index));
+        return `<a class="project-nav-link" data-project-nav="${name}" aria-label="Project ${name}" title="${name}" href="#/projects/${escapeHtml(encodeURIComponent(project.name))}"><span class="project-nav-dot" aria-hidden="true">${initial}</span><span>${name}</span></a>`;
       }).join("") : `<span class="project-nav-state">No projects</span>`;
       setActiveProjectNav(state.project);
       if (focusedProject) [...document.querySelectorAll("[data-project-nav]")].find((link) => link.dataset.projectNav === focusedProject)?.focus();
