@@ -22,6 +22,41 @@ fn run_json(
     response["data"].clone()
 }
 
+fn sqlite_sidecar(path: &std::path::Path, suffix: &str) -> std::path::PathBuf {
+    let mut sidecar = path.as_os_str().to_owned();
+    sidecar.push(suffix);
+    sidecar.into()
+}
+
+#[test]
+fn unrelated_sqlite_database_is_rejected_without_changes() {
+    let app = crate::support::TestApp::new();
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE sentinel (value TEXT NOT NULL);\n\
+             INSERT INTO sentinel VALUES ('keep-me');",
+        )
+        .unwrap();
+    drop(connection);
+    let expected_bytes = std::fs::read(&app.database).unwrap();
+
+    let output = app
+        .command()
+        .args(["project", "list", "--json"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+    let response: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(response["schema_version"], 1);
+    assert_eq!(response["error"]["code"], "database_not_initialized");
+    assert_eq!(std::fs::read(&app.database).unwrap(), expected_bytes);
+    for suffix in ["-wal", "-shm", "-journal"] {
+        assert!(!sqlite_sidecar(&app.database, suffix).exists());
+    }
+}
+
 #[test]
 fn phase_one_workflow_preserves_revisions_states_events_and_context() {
     let app = crate::support::TestApp::new();

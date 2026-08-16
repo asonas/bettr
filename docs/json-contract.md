@@ -86,6 +86,20 @@ JSON Issue objects also include the immutable Issue UUID in `id`, the immutable 
 | 5 | SQLite remained busy beyond the configured wait | `database_busy` |
 | 10 | Internal failure | `internal_error` |
 
+Selecting an existing SQLite file that does not have the current bettr application ID and schema version exits 3 with:
+
+```json
+{
+  "schema_version": 1,
+  "error": {
+    "code": "database_not_initialized",
+    "message": "database is not initialized"
+  }
+}
+```
+
+For normal local use, bettr checks the file header without opening SQLite, then rechecks the identity on the opened connection before enabling connection settings. This protects an unrelated SQLite database from accidental path selection without changing its existing bytes or creating SQLite sidecars during the header preflight. It is not an adversary-resistant filesystem guarantee: deliberate path replacement by another process during the identity-check/open window is outside the MVP contract.
+
 The success envelope above is the exit-code 0 response from the acceptance fixture's Issue creation. The same fixture yields these input, lookup, and conflict examples:
 
 ```sh

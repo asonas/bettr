@@ -23,6 +23,12 @@ By default, bettr stores data at:
 
 Use `--database /absolute/path/to/bettr.db` or `BETTR_DATABASE` to select another SQLite file. Run `bettr context --json` to inspect the resolved database and project without creating a database.
 
+### Database safety boundary
+
+For normal local use, bettr protects unrelated SQLite databases from accidental path selection. Before SQLite opens an existing database, bettr reads its header without modifying it and checks the bettr application ID and schema version. After opening the database, bettr checks the identity again on that same connection before enabling connection settings such as WAL. A rejected database returns exit code 3 with `database_not_initialized`; its existing bytes are not changed and bettr does not create `-wal`, `-shm`, or `-journal` sidecars during the header preflight.
+
+This is an MVP safeguard against accidental selection, not a complete defense against a hostile local process. Deliberate replacement of the selected path during the identity-check/open window is outside the MVP guarantee.
+
 ## Shortest workflow
 
 Create a project and an Issue:
