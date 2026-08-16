@@ -64,7 +64,7 @@ mod tests {
             let transaction = connection
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .unwrap();
-            assert!(super::apply_pending(&transaction, 1, &[migration]).is_err());
+            assert!(super::apply_pending(&transaction, &[migration]).is_err());
         }
 
         assert_eq!(
@@ -127,11 +127,11 @@ Expected: 新しいversion 2・履歴・移行・未知versionのアサーショ
 
 **Interfaces:**
 - Consumes: Task 1の`Migration`/`apply_pending`テスト。
-- Produces: `pub(crate) const LATEST_SCHEMA_VERSION: u32 = 2`、`pub(crate) const BASE_SCHEMA_VERSION: u32 = 1`、`pub(crate) fn is_supported_version(version: u32) -> bool`、`pub(crate) fn apply_pending(transaction: &rusqlite::Transaction<'_>, current_version: u32, migrations: &[Migration]) -> Result<Vec<Migration>, rusqlite::Error>`。
+- Produces: `pub(crate) const LATEST_SCHEMA_VERSION: u32 = 2`、`pub(crate) const BASE_SCHEMA_VERSION: u32 = 1`、`pub(crate) fn is_supported_version(version: u32) -> bool`、`pub(crate) fn apply_pending(transaction: &rusqlite::Transaction<'_>, migrations: &[Migration]) -> Result<Vec<Migration>, rusqlite::Error>`。
 
 - [ ] **Step 1: Migration型と実行器の最小実装を書く**
 
-`Migration`は`version: u32`、`name: &'static str`、`apply: fn(&rusqlite::Transaction<'_>) -> Result<(), rusqlite::Error>`を持つ`Copy`型にする。`apply_pending`はversionが`current_version`より大きいMigrationだけを登録順に適用し、成功ごとに履歴行と`PRAGMA user_version`を同じTransactionへ書き込む。失敗時はエラーを返し、Transactionの所有者がdropしてrollbackできるように内部でcommitしない。
+`Migration`は`version: u32`、`name: &'static str`、`apply: fn(&rusqlite::Transaction<'_>) -> Result<(), rusqlite::Error>`を持つ`Copy`型にする。`apply_pending`はTransaction内で`PRAGMA user_version`を読み、ロック待機後の最新versionより大きいMigrationだけを登録順に適用する。成功ごとに履歴行と`PRAGMA user_version`を同じTransactionへ書き込む。失敗時はエラーを返し、Transactionの所有者がdropしてrollbackできるように内部でcommitしない。
 
 ```rust
 #[derive(Clone, Copy)]
@@ -143,13 +143,14 @@ pub(crate) struct Migration {
 
 pub(crate) fn apply_pending(
     transaction: &rusqlite::Transaction<'_>,
-    current_version: u32,
     migrations: &[Migration],
 ) -> Result<Vec<Migration>, rusqlite::Error> {
+    let current_version: i64 = transaction
+        .pragma_query_value(None, "user_version", |row| row.get(0))?;
     let mut applied = Vec::new();
     for migration in migrations
         .iter()
-        .filter(|migration| migration.version > current_version)
+        .filter(|migration| i64::from(migration.version) > current_version)
     {
         (migration.apply)(transaction)?;
         transaction.execute(
@@ -228,7 +229,7 @@ Expected: rollbackテストがPASSし、失敗したMigrationが作成したテ�
 
 - [ ] **Step 3: 同一接続の再検査とMigration実行を実装する**
 
-`open_verified`で接続後のidentityを再検査し、既知versionであることを確認してから既存の接続設定を適用する。versionが1の場合は`BEGIN IMMEDIATE`で`apply_pending`を呼び、返されたMigrationごとに`schema_migrate`監査を同一Transactionへ追加し、最後にcommitする。監査contextはsystem、target/project/revisionなし、changed fields空配列、metadataは次の形に固定する。
+`open_verified`で接続後のidentityを再検査し、既知versionであることを確認してから既存の接続設定を適用する。versionが1の場合は`BEGIN IMMEDIATE`で`apply_pending`を呼び、実行器がロック取得後の`user_version`を再読込する。返されたMigrationごとに`schema_migrate`監査を同一Transactionへ追加し、最後にcommitする。監査contextはsystem、target/project/revisionなし、changed fields空配列、metadataは次の形に固定する。
 
 ```json
 {
@@ -277,9 +278,9 @@ fn downgrade_to_schema_version_one(app: &crate::support::TestApp) {
 }
 ```
 
-- [ ] **Step 2: 同時MigrationテストをREDで追加する**
+- [ ] **Step 2: stale versionと同時MigrationのテストをREDで追加する**
 
-`GatedBettr`を2つ起動し、両方に`project list --json`を渡して同じversion 1 fixtureを同時に開かせる。両プロセス終了後にversion 2、履歴version 1・2の各1行、`schema_migrate`監査1件、`PRAGMA integrity_check = 'ok'`、`PRAGMA foreign_key_check`空を検証する。
+Migration実行器のunit testでは、1つ目のTransactionをcommitした後、古いversion 1を渡して2つ目のTransactionを開始してもno-opになることを検証する。さらに`GatedBettr`を2つ起動し、両方に`project list --json`を渡して同じversion 1 fixtureを同時に開かせる。両プロセス終了後にversion 2、履歴version 1・2の各1行、`schema_migrate`監査1件、`PRAGMA integrity_check = 'ok'`、`PRAGMA foreign_key_check`空を検証する。
 
 - [ ] **Step 3: 並行テストを実行して失敗を確認する**
 

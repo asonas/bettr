@@ -80,13 +80,13 @@ JSON Issue objects also include the immutable Issue UUID in `id`, the immutable 
 | Code | Meaning | Representative error code |
 | ---: | --- | --- |
 | 0 | Success | none |
-| 2 | Invalid input or command usage | `invalid_input` |
+| 2 | Invalid input, command usage, or unsupported database schema | `invalid_input`, `unsupported_database_schema_version` |
 | 3 | Project, Issue, or initialized database not found | `not_found`, `database_not_initialized` |
 | 4 | State, name, or revision conflict | `invalid_transition`, `project_name_conflict`, `revision_conflict` |
 | 5 | SQLite remained busy beyond the configured wait | `database_busy` |
 | 10 | Internal failure | `internal_error` |
 
-When a command that requires an initialized database selects an existing SQLite file without the current bettr application ID and schema version, the identity preflight rejects it with exit 3:
+When a command that requires an initialized database selects an existing SQLite file without the bettr application ID, the identity preflight rejects it with exit 3:
 
 ```json
 {
@@ -98,7 +98,23 @@ When a command that requires an initialized database selects an existing SQLite 
 }
 ```
 
-For normal local use, bettr verifies that the selected path resolves to a regular file and checks its header without opening SQLite, then rechecks the identity on the opened connection before enabling connection settings. This protects an unrelated SQLite database from accidental path selection without changing its existing bytes or creating SQLite sidecars during the header preflight.
+For normal local use, bettr verifies that the selected path resolves to a regular file and checks its header without opening SQLite, then rechecks the identity on the opened connection before enabling connection settings. A known older bettr database schema is migrated in a single transaction before the command continues. This protects an unrelated SQLite database from accidental path selection without changing its existing bytes or creating SQLite sidecars during the header preflight.
+
+The SQLite database schema version is independent from the JSON response `schema_version`. The current database schema version is 2; version 1 is migrated automatically and its applied versions are recorded in `schema_migrations`. A bettr database with an unknown schema version is rejected before SQLite is opened for writing and exits 2:
+
+```json
+{
+  "schema_version": 1,
+  "error": {
+    "code": "unsupported_database_schema_version",
+    "message": "database schema version 99 is unsupported; current version is 2",
+    "details": {
+      "found_version": 99,
+      "current_version": 2
+    }
+  }
+}
+```
 
 `init` and `context` do not use the exit 3 contract above. When the selected path already exists, `init --json` exits 2 with `database_already_initialized`. When an unrelated SQLite path is selected, `context --json` returns the resolved context in the success envelope and exits 0 without creating or changing the database.
 
