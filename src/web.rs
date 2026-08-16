@@ -266,7 +266,8 @@ fn error_response(status: u16, error: crate::error::AppError) -> HttpResponse {
 
 fn status_code(error: &crate::error::AppError) -> u16 {
     match error {
-        crate::error::AppError::InvalidInput(_) => 400,
+        crate::error::AppError::InvalidInput(_)
+        | crate::error::AppError::UnsupportedDatabaseSchemaVersion { .. } => 400,
         crate::error::AppError::NotFound(_) | crate::error::AppError::DatabaseNotInitialized => 404,
         crate::error::AppError::DatabaseBusy(_) => 503,
         crate::error::AppError::Conflict(_)
