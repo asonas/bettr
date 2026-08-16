@@ -1,0 +1,14 @@
+{
+  "json_contract_version": 1,
+  "cli_version": "0.1.0",
+  "capabilities": {
+    "issue_dependencies": true,
+    "issue_parent": true,
+    "issue_claim": true,
+    "issue_lease": true,
+    "human_decisions": true,
+    "event_cursor": true,
+    "capabilities": true,
+    "idempotency": false
+  }
+}

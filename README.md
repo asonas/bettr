@@ -1,6 +1,6 @@
 # bettr
 
-bettr is a local, non-interactive Issue tracker for agent work. It stores projects, Issues, comments, state transitions, execution context, and audit events in SQLite. Phase 1 supports macOS and Linux.
+bettr is a local, non-interactive Issue tracker for agent work. It stores projects, Issues, comments, coordination state, execution context, and audit events in SQLite. Phase 2 supports macOS and Linux.
 
 ## Install
 
@@ -119,6 +119,53 @@ Human automation can set `BETTR_OPERATOR`; otherwise bettr uses the OS username:
 BETTR_OPERATOR=reviewer bettr issue resume 1 --project bettr --revision 4
 ```
 
+## Phase 2 coordination
+
+Discover the commands a caller may use before starting work:
+
+```sh
+bettr capabilities --json
+```
+
+Agent work uses a session lease. Claiming is atomic, heartbeat renews only the lease, and an expired lease remains visible as `stale` until a reasoned takeover:
+
+```sh
+export BETTR_AGENT=codex
+export BETTR_SESSION_ID=work-123
+bettr issue claim --project bettr --json
+bettr issue heartbeat 1 --project bettr --json
+bettr issue takeover 1 --project bettr --reason "Previous session expired" --json
+```
+
+Dependencies and one-level parents use structured references such as `bettr#12`:
+
+```sh
+bettr issue dependency add bettr#3 bettr#12 --json
+bettr issue parent set bettr#12 bettr#3 --json
+```
+
+When an agent needs a human choice, create a decision request and stop work on that Issue. A resolver records the answer and explicit next state:
+
+Use `todo` when the Issue needs to return to agent work; active `in_progress` state is entered through a new claim and lease.
+
+```sh
+bettr decision request 12 --project bettr \
+  --question "Which behavior is intended?" \
+  --background "The choice changes the rollout." --json
+BETTR_OPERATOR=reviewer bettr decision resolve <request-uuid> \
+  --answer "Use the safer behavior" --next-state todo --json
+```
+
+直接`blocked`にする場合は`--reason`と`--wait-kind`、`done`にする場合は`--summary`と`--verification`、`cancelled`にする場合は`--reason`を指定する。これらは対応するIssue遷移イベントを記録する。
+
+wayfinder-style consumers can persist an exclusive event cursor:
+
+```sh
+bettr event list --after <cursor> --limit 100 --include-issue --json
+```
+
+The Codex adapter is in [`skills/bettr`](skills/bettr), the Claude Code adapter is in [`skills/bettr-claude`](skills/bettr-claude), and a wayfinder integration example is in [`examples/wayfinder/phase2-workflow.md`](examples/wayfinder/phase2-workflow.md). Idempotency is not advertised as available yet.
+
 `BETTR_PROJECT` supplies a default project. Project resolution is command argument, environment, nearest `.bettr.toml`, user config, then no default. User config is stored at `~/Library/Application Support/bettr/config.toml` on macOS and `${XDG_CONFIG_HOME:-~/.config}/bettr/config.toml` on Linux.
 
 ## Codex skill
@@ -134,11 +181,11 @@ python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-githu
 
 When a conversation explicitly identifies a bettr Issue, the skill records a material decision, requirement change, discovery, risk, blocker, next action, or verification result as a comment before the response. It never infers an Issue number or creates an Issue. When evidence is unambiguous, it can also move `todo` to `in_progress`, `in_progress` to `blocked`, or `in_progress` to `done`; it never automatically cancels an Issue. Duplicate, ambiguous, unrelated, and updates to completed Issues are skipped. Users can explicitly opt out of recording an update.
 
-## Phase 1 scope
+## Implemented scope
 
 Phase 1 provides projects, priorities (`critical`, `high`, `medium`, and `low`), five Issue states (`todo`, `in_progress`, `blocked`, `done`, and `cancelled`), immutable comments, revision-guarded edits, history, cross-project status, execution context, and SQLite audit events.
 
-The Phase 1 CLI does not start agents, share data over a network, or support external databases. It also does not yet provide claim or lease coordination, decision requests, dependencies, parent-child Issues, structured references, event cursors, idempotency keys, JSONL audit export, backup and restore, redaction, or `doctor` diagnostics.
+The CLI does not start agents, share data over a network, or support external databases. JSONL audit export, backup and restore, redaction, and `doctor` diagnostics remain future work. See [`contracts/capabilities.json`](contracts/capabilities.json) for the machine-readable availability matrix.
 
 ## Performance baseline
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bettr Claude Code"
+  short_description: "Use bettr coordination from Claude Code"
+  default_prompt: "Use the bettr Claude Code adapter for local Issue coordination."

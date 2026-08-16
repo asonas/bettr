@@ -288,6 +288,176 @@ impl Transition {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct DecisionResolution {
+    target_state: IssueState,
+    transition: Option<Transition>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DecisionResolutionInput {
+    target_state: IssueState,
+    summary: Option<String>,
+    verification: Option<String>,
+    reason: Option<String>,
+    wait_kind: Option<WaitKind>,
+}
+
+impl DecisionResolutionInput {
+    pub fn new(
+        target_state: IssueState,
+        summary: Option<String>,
+        verification: Option<String>,
+        reason: Option<String>,
+        wait_kind: Option<WaitKind>,
+    ) -> Self {
+        Self {
+            target_state,
+            summary,
+            verification,
+            reason,
+            wait_kind,
+        }
+    }
+
+    pub const fn target_state(&self) -> IssueState {
+        self.target_state
+    }
+
+    pub fn into_resolution(self) -> Result<DecisionResolution, DomainError> {
+        DecisionResolution::new(
+            self.target_state,
+            self.summary,
+            self.verification,
+            self.reason,
+            self.wait_kind,
+        )
+    }
+}
+
+impl DecisionResolution {
+    pub fn new(
+        target_state: IssueState,
+        summary: Option<String>,
+        verification: Option<String>,
+        reason: Option<String>,
+        wait_kind: Option<WaitKind>,
+    ) -> Result<Self, DomainError> {
+        let transition = match target_state {
+            IssueState::Todo => {
+                if summary.is_some()
+                    || verification.is_some()
+                    || reason.is_some()
+                    || wait_kind.is_some()
+                {
+                    return Err(DomainError::InvalidMetadata(
+                        "decision resolution to todo does not accept transition metadata"
+                            .to_owned(),
+                    ));
+                }
+                None
+            }
+            IssueState::Blocked => {
+                if summary.is_some() || verification.is_some() {
+                    return Err(DomainError::InvalidMetadata(
+                        "decision resolution to blocked does not accept summary or verification"
+                            .to_owned(),
+                    ));
+                }
+                let reason = reason.ok_or_else(|| {
+                    DomainError::InvalidMetadata(
+                        "decision resolution to blocked requires --reason".to_owned(),
+                    )
+                })?;
+                let wait_kind = wait_kind.ok_or_else(|| {
+                    DomainError::InvalidMetadata(
+                        "decision resolution to blocked requires --wait-kind".to_owned(),
+                    )
+                })?;
+                Some(Transition::block(reason, wait_kind)?)
+            }
+            IssueState::Done => {
+                if reason.is_some() || wait_kind.is_some() {
+                    return Err(DomainError::InvalidMetadata(
+                        "decision resolution to done does not accept reason or wait kind"
+                            .to_owned(),
+                    ));
+                }
+                let summary = summary.ok_or_else(|| {
+                    DomainError::InvalidMetadata(
+                        "decision resolution to done requires --summary".to_owned(),
+                    )
+                })?;
+                let verification = verification.ok_or_else(|| {
+                    DomainError::InvalidMetadata(
+                        "decision resolution to done requires --verification".to_owned(),
+                    )
+                })?;
+                Some(Transition::complete(summary, verification)?)
+            }
+            IssueState::Cancelled => {
+                if summary.is_some() || verification.is_some() || wait_kind.is_some() {
+                    return Err(DomainError::InvalidMetadata(
+                        "decision resolution to cancelled does not accept summary, verification, or wait kind"
+                            .to_owned(),
+                    ));
+                }
+                let reason = reason.ok_or_else(|| {
+                    DomainError::InvalidMetadata(
+                        "decision resolution to cancelled requires --reason".to_owned(),
+                    )
+                })?;
+                Some(Transition::cancel(reason)?)
+            }
+            IssueState::InProgress => {
+                return Err(DomainError::InvalidTransition {
+                    from: IssueState::Blocked,
+                    transition: "decision_resolve",
+                });
+            }
+        };
+        Ok(Self {
+            target_state,
+            transition,
+        })
+    }
+
+    pub const fn target_state(&self) -> IssueState {
+        self.target_state
+    }
+
+    pub const fn event_type(&self) -> &'static str {
+        match self.target_state {
+            IssueState::Todo => "decision_resolved",
+            IssueState::Blocked => "issue_blocked",
+            IssueState::Done => "issue_completed",
+            IssueState::Cancelled => "issue_cancelled",
+            IssueState::InProgress => "decision_resolved",
+        }
+    }
+
+    pub const fn changed_fields(&self) -> &'static [&'static str] {
+        match self.target_state {
+            IssueState::Todo => &["decision", "state"],
+            IssueState::Blocked => &["decision", "state", "reason", "wait_kind"],
+            IssueState::Done => &["decision", "state", "summary", "verification"],
+            IssueState::Cancelled => &["decision", "state", "reason"],
+            IssueState::InProgress => &["decision", "state"],
+        }
+    }
+
+    pub fn event_metadata(&self, from_state: IssueState, revision: i64) -> serde_json::Value {
+        match &self.transition {
+            Some(transition) => transition.event_metadata(from_state, self.target_state, revision),
+            None => serde_json::json!({
+                "from_state": from_state,
+                "to_state": self.target_state,
+                "revision": revision,
+            }),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DomainError {
     InvalidMetadata(String),
@@ -412,6 +582,135 @@ pub struct IssueListItem {
     pub project: String,
     #[serde(flatten)]
     pub issue: Issue,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IssueReference {
+    pub project: String,
+    pub number: i64,
+}
+
+impl IssueReference {
+    pub fn parse(
+        value: &str,
+        default_project: Option<&str>,
+    ) -> Result<Self, crate::error::AppError> {
+        let (project, number) = match value.rsplit_once('#') {
+            Some((project, number)) => (project.to_owned(), number),
+            None => (
+                default_project
+                    .ok_or_else(|| {
+                        crate::error::AppError::InvalidInput(
+                            "issue reference must use PROJECT#NUMBER or provide --project"
+                                .to_owned(),
+                        )
+                    })?
+                    .to_owned(),
+                value,
+            ),
+        };
+        validate_project_name(&project)?;
+        let number = number.parse::<i64>().map_err(|_| {
+            crate::error::AppError::InvalidInput(
+                "issue reference number must be a positive integer".to_owned(),
+            )
+        })?;
+        if number < 1 {
+            return Err(crate::error::AppError::InvalidInput(
+                "issue reference number must be positive".to_owned(),
+            ));
+        }
+        Ok(Self { project, number })
+    }
+
+    pub fn label(&self) -> String {
+        format!("{}#{}", self.project, self.number)
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct IssueDependency {
+    pub blocker: String,
+    pub blocked: String,
+    pub relation: &'static str,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct IssueParent {
+    pub child: String,
+    pub parent: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct IssueLease {
+    pub agent: String,
+    pub session_id: String,
+    pub claimed_at: chrono::DateTime<chrono::Utc>,
+    pub heartbeat_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub lease_revision: i64,
+    pub stale: bool,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ClaimedIssue {
+    pub issue: Issue,
+    pub lease: IssueLease,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct DecisionRequest {
+    pub id: uuid::Uuid,
+    pub issue: String,
+    pub question: String,
+    pub background: String,
+    pub requester_kind: Option<InitiatorKind>,
+    pub requester_name: Option<String>,
+    pub requester_session_id: Option<String>,
+    pub status: String,
+    pub answer: Option<String>,
+    pub resolver_kind: Option<InitiatorKind>,
+    pub resolver_name: Option<String>,
+    pub resolver_session_id: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub resolved_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct EventRecord {
+    pub sequence: i64,
+    pub event_type: String,
+    pub project_id: Option<uuid::Uuid>,
+    pub issue_id: Option<uuid::Uuid>,
+    pub changed_fields: Vec<String>,
+    pub revision: Option<i64>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub issue: Option<Issue>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct EventPage {
+    pub next_cursor: i64,
+    pub has_more: bool,
+    pub events: Vec<EventRecord>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct CapabilitySet {
+    pub json_contract_version: u32,
+    pub cli_version: &'static str,
+    pub capabilities: std::collections::BTreeMap<&'static str, bool>,
+}
+
+pub fn validate_decision_text(name: &str, value: &str) -> Result<(), crate::error::AppError> {
+    if value.trim().is_empty() {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "{name} must not be empty"
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, serde::Serialize)]

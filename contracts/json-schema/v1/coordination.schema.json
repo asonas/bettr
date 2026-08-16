@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["issue", "lease"],
+      "properties": {
+        "issue": { "type": "object" },
+        "lease": { "type": "object" }
+      },
+      "additionalProperties": true
+    },
+    {
+      "type": "object",
+      "required": ["id", "issue", "status", "question", "background"],
+      "properties": {
+        "id": { "type": "string" },
+        "issue": { "type": "string" },
+        "status": { "enum": ["open", "resolved"] },
+        "question": { "type": "string" },
+        "background": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  ]
+}

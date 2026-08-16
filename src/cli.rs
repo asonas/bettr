@@ -70,6 +70,15 @@ impl AuditInvocation {
             ("issue", Some("edit")) => "issue_edit",
             ("issue", Some("comment")) => "issue_comment",
             ("issue", Some("history")) => "issue_history",
+            ("issue", Some("dependency")) => "issue_dependency",
+            ("issue", Some("parent")) => "issue_parent",
+            ("issue", Some("claim")) => "issue_claim",
+            ("issue", Some("heartbeat")) => "issue_heartbeat",
+            ("issue", Some("takeover")) => "issue_takeover",
+            ("decision", Some("request")) => "decision_request",
+            ("decision", Some("resolve")) => "decision_resolve",
+            ("event", Some("list")) => "event_list",
+            ("capabilities", _) => "capabilities",
             ("issue", Some("start")) => "issue_start",
             ("issue", Some("block")) => "issue_block",
             ("issue", Some("resume")) => "issue_resume",
@@ -97,6 +106,9 @@ pub enum Command {
     Init(InitCommand),
     Project(ProjectCommand),
     Issue(IssueCommand),
+    Decision(DecisionCommand),
+    Event(EventCommand),
+    Capabilities(CapabilitiesCommand),
     Status(StatusCommand),
     Audit(AuditCommand),
     Context(ContextCommand),
@@ -137,6 +149,11 @@ pub enum IssueSubcommand {
     Edit(IssueEditCommand),
     Comment(IssueCommentCommand),
     History(IssueHistoryCommand),
+    Dependency(IssueDependencyCommand),
+    Parent(IssueParentCommand),
+    Claim(IssueClaimCommand),
+    Heartbeat(IssueHeartbeatCommand),
+    Takeover(IssueTakeoverCommand),
     Start(IssueStartCommand),
     Block(IssueBlockCommand),
     Resume(IssueResumeCommand),
@@ -235,6 +252,138 @@ pub struct IssueCommentCommand {
 pub struct IssueHistoryCommand {
     pub number: i64,
 }
+
+#[derive(clap::Args, Debug)]
+pub struct IssueDependencyCommand {
+    #[command(subcommand)]
+    pub command: IssueDependencySubcommand,
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum IssueDependencySubcommand {
+    Add(IssueRelationCommand),
+    Remove(IssueRelationCommand),
+    List(IssueReferenceCommand),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueRelationCommand {
+    pub blocker: String,
+    pub blocked: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueReferenceCommand {
+    pub reference: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueParentCommand {
+    #[command(subcommand)]
+    pub command: IssueParentSubcommand,
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum IssueParentSubcommand {
+    Set(IssueParentSetCommand),
+    List(IssueReferenceCommand),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueParentSetCommand {
+    pub child: String,
+    pub parent: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueClaimCommand {
+    pub number: Option<i64>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueHeartbeatCommand {
+    pub number: i64,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueTakeoverCommand {
+    pub number: i64,
+
+    #[arg(long)]
+    pub reason: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct DecisionCommand {
+    #[command(subcommand)]
+    pub command: DecisionSubcommand,
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum DecisionSubcommand {
+    Request(DecisionRequestCommand),
+    Resolve(DecisionResolveCommand),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct DecisionRequestCommand {
+    pub number: i64,
+
+    #[arg(long)]
+    pub question: String,
+
+    #[arg(long)]
+    pub background: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct DecisionResolveCommand {
+    pub request_id: String,
+
+    #[arg(long)]
+    pub answer: String,
+
+    #[arg(long)]
+    pub next_state: crate::domain::IssueState,
+
+    #[arg(long)]
+    pub summary: Option<String>,
+
+    #[arg(long)]
+    pub verification: Option<String>,
+
+    #[arg(long)]
+    pub reason: Option<String>,
+
+    #[arg(long, value_enum)]
+    pub wait_kind: Option<crate::domain::WaitKind>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct EventCommand {
+    #[command(subcommand)]
+    pub command: EventSubcommand,
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum EventSubcommand {
+    List(EventListCommand),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct EventListCommand {
+    #[arg(long)]
+    pub after: i64,
+
+    #[arg(long)]
+    pub limit: Option<i64>,
+
+    #[arg(long)]
+    pub include_issue: bool,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct CapabilitiesCommand {}
 
 #[derive(clap::Args, Debug)]
 pub struct IssueListCommand {

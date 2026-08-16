@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["json_contract_version", "cli_version", "capabilities"],
+  "properties": {
+    "json_contract_version": { "const": 1 },
+    "cli_version": { "type": "string", "minLength": 1 },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    }
+  },
+  "additionalProperties": true
+}

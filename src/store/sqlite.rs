@@ -3,6 +3,7 @@ pub struct Database {
 }
 
 const BETTR_APPLICATION_ID: u32 = 0x4254_5452;
+const LEASE_TTL_MINUTES: i64 = 15;
 
 struct DatabaseIdentity {
     application_id: u32,
@@ -325,6 +326,23 @@ impl Database {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(crate::error::AppError::from)?;
         let updated_at = chrono::Utc::now();
+        if target_state == crate::domain::IssueState::Done {
+            let has_open_decision = transaction
+                .query_row(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM decision_requests
+                         WHERE issue_id = ?1 AND status = 'open'
+                     )",
+                    [issue.id.to_string()],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(crate::error::AppError::from)?;
+            if has_open_decision {
+                return Err(crate::error::AppError::Conflict(
+                    "Issue has an unresolved human decision".to_owned(),
+                ));
+            }
+        }
         let changed = transaction
             .execute(
                 "UPDATE issues
@@ -352,6 +370,14 @@ impl Database {
                     error => crate::error::AppError::from(error),
                 })?;
             return Err(crate::error::AppError::RevisionConflict { current_revision });
+        }
+        if target_state != crate::domain::IssueState::InProgress {
+            transaction
+                .execute(
+                    "DELETE FROM issue_leases WHERE issue_id = ?1",
+                    [issue.id.to_string()],
+                )
+                .map_err(crate::error::AppError::from)?;
         }
 
         let mut updated_issue = issue.clone();
@@ -665,6 +691,1052 @@ impl Database {
         Ok(events)
     }
 
+    pub fn request_decision(
+        &mut self,
+        project_name: &str,
+        number: i64,
+        question: &str,
+        background: &str,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::DecisionRequest, crate::error::AppError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::AppError::from)?;
+        let project_id = Self::project_id_in_transaction(&transaction, project_name)?;
+        let issue = Self::issue_in_transaction(&transaction, project_id, number)?;
+        if matches!(
+            issue.state,
+            crate::domain::IssueState::Done | crate::domain::IssueState::Cancelled
+        ) {
+            return Err(crate::error::AppError::Conflict(
+                "cannot request a decision for a completed Issue".to_owned(),
+            ));
+        }
+
+        let lease_owner = match transaction.query_row(
+            "SELECT agent, session_id FROM issue_leases WHERE issue_id = ?1",
+            [issue.id.to_string()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        ) {
+            Ok(owner) => Some(owner),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(error) => return Err(crate::error::AppError::from(error)),
+        };
+        if let Some((lease_agent, lease_session_id)) = lease_owner {
+            let (agent, session_id) = Self::agent_session(context)?;
+            if lease_agent != agent || lease_session_id != session_id {
+                return Err(crate::error::AppError::Conflict(
+                    "lease is owned by another agent session".to_owned(),
+                ));
+            }
+            transaction
+                .execute(
+                    "DELETE FROM issue_leases WHERE issue_id = ?1 AND agent = ?2 AND session_id = ?3",
+                    rusqlite::params![issue.id.to_string(), agent, session_id],
+                )
+                .map_err(crate::error::AppError::from)?;
+        }
+
+        let now = chrono::Utc::now();
+        let request_id = uuid::Uuid::new_v4();
+        let updated_revision = issue.revision + 1;
+        transaction
+            .execute(
+                "UPDATE issues
+                 SET state = 'blocked', revision = revision + 1, updated_at = ?1
+                 WHERE id = ?2 AND revision = ?3",
+                rusqlite::params![now.to_rfc3339(), issue.id.to_string(), issue.revision],
+            )
+            .map_err(crate::error::AppError::from)?;
+        transaction
+            .execute(
+                "INSERT INTO decision_requests (
+                    id, issue_id, question, background, requester_kind, requester_name,
+                    requester_session_id, status, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'open', ?8)",
+                rusqlite::params![
+                    request_id.to_string(),
+                    issue.id.to_string(),
+                    question,
+                    background,
+                    context.kind.as_str(),
+                    context.initiator_name(),
+                    context.session_id,
+                    now.to_rfc3339(),
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut updated_issue = issue.clone();
+        updated_issue.state = crate::domain::IssueState::Blocked;
+        updated_issue.revision = updated_revision;
+        updated_issue.updated_at = now;
+        let event_metadata = Self::event_metadata(
+            serde_json::json!({
+                "request_id": request_id,
+                "from_state": issue.state,
+                "to_state": updated_issue.state,
+                "revision": updated_revision,
+            }),
+            context,
+        )?;
+        Self::insert_domain_event(
+            &transaction,
+            &updated_issue,
+            "decision_requested",
+            &event_metadata,
+            now,
+        )?;
+        let issue_id = updated_issue.id.to_string();
+        let audit_metadata = serde_json::json!({
+            "request_id": request_id,
+            "revision": updated_revision,
+        })
+        .to_string();
+        Self::insert_audit_event(
+            &transaction,
+            AuditInsert {
+                operation: "decision_request",
+                success: true,
+                context,
+                target: Some(("issue", &issue_id)),
+                project: Some((issue.project_id, project_name)),
+                revision: Some(updated_revision),
+                started_at: now,
+                exit_code: 0,
+                changed_fields: &["state", "decision_request"],
+                metadata_json: &audit_metadata,
+            },
+        )?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
+
+        Ok(crate::domain::DecisionRequest {
+            id: request_id,
+            issue: format!("{project_name}#{}", issue.number),
+            question: question.to_owned(),
+            background: background.to_owned(),
+            requester_kind: Some(context.kind),
+            requester_name: context.initiator_name().map(str::to_owned),
+            requester_session_id: context.session_id.clone(),
+            status: "open".to_owned(),
+            answer: None,
+            resolver_kind: None,
+            resolver_name: None,
+            resolver_session_id: None,
+            created_at: now,
+            resolved_at: None,
+        })
+    }
+
+    pub fn resolve_decision(
+        &mut self,
+        request_id: uuid::Uuid,
+        answer: &str,
+        resolution_input: crate::domain::DecisionResolutionInput,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::DecisionRequest, crate::error::AppError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::AppError::from)?;
+        let mut request = transaction
+            .query_row(
+                "SELECT request.id, project.name, issue.number, request.question,
+                        request.background, request.requester_kind, request.requester_name,
+                        request.requester_session_id, request.status, request.answer,
+                        request.resolver_kind, request.resolver_name,
+                        request.resolver_session_id, request.created_at, request.resolved_at
+                 FROM decision_requests request
+                 JOIN issues issue ON issue.id = request.issue_id
+                 JOIN projects project ON project.id = issue.project_id
+                 WHERE request.id = ?1",
+                [request_id.to_string()],
+                Self::decision_from_row,
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    crate::error::AppError::NotFound("decision request not found".to_owned())
+                }
+                error => crate::error::AppError::from(error),
+            })?;
+        if request.status != "open" {
+            return Err(crate::error::AppError::Conflict(
+                "decision request is already resolved".to_owned(),
+            ));
+        }
+        if context.kind == crate::domain::InitiatorKind::Agent
+            && request.requester_kind == Some(crate::domain::InitiatorKind::Agent)
+            && request.requester_name == context.agent
+            && request.requester_session_id == context.session_id
+        {
+            return Err(crate::error::AppError::Conflict(
+                "the requesting agent session cannot resolve its own decision request".to_owned(),
+            ));
+        }
+        if context.kind != crate::domain::InitiatorKind::Human {
+            return Err(crate::error::AppError::Conflict(
+                "decision requests must be resolved by a human".to_owned(),
+            ));
+        }
+        if resolution_input.target_state() == crate::domain::IssueState::InProgress {
+            return Err(crate::error::AppError::Conflict(
+                "decision resolution cannot enter in_progress without a lease; use todo and claim the Issue"
+                    .to_owned(),
+            ));
+        }
+        let resolution = resolution_input.into_resolution()?;
+        let (issue_id, project_id, issue_number) = transaction
+            .query_row(
+                "SELECT request.issue_id, issue.project_id, issue.number
+                 FROM decision_requests request
+                 JOIN issues issue ON issue.id = request.issue_id
+                 WHERE request.id = ?1",
+                [request_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .map_err(crate::error::AppError::from)?;
+        let issue_id = uuid::Uuid::parse_str(&issue_id)
+            .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
+        let project_id = uuid::Uuid::parse_str(&project_id)
+            .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
+        if resolution.target_state() == crate::domain::IssueState::Done {
+            let another_open_request = transaction
+                .query_row(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM decision_requests
+                         WHERE issue_id = ?1 AND status = 'open' AND id <> ?2
+                     )",
+                    rusqlite::params![issue_id.to_string(), request_id.to_string()],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(crate::error::AppError::from)?;
+            if another_open_request {
+                return Err(crate::error::AppError::Conflict(
+                    "Issue has another unresolved human decision".to_owned(),
+                ));
+            }
+        }
+
+        let issue = Self::issue_in_transaction(&transaction, project_id, issue_number)?;
+        let now = chrono::Utc::now();
+        transaction
+            .execute(
+                "UPDATE issues
+                 SET state = ?1, revision = revision + 1, updated_at = ?2
+                 WHERE id = ?3 AND revision = ?4",
+                rusqlite::params![
+                    resolution.target_state().as_str(),
+                    now.to_rfc3339(),
+                    issue.id.to_string(),
+                    issue.revision,
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        transaction
+            .execute(
+                "UPDATE decision_requests
+                 SET status = 'resolved', answer = ?1, resolver_kind = ?2,
+                     resolver_name = ?3, resolver_session_id = ?4, resolved_at = ?5
+                 WHERE id = ?6 AND status = 'open'",
+                rusqlite::params![
+                    answer,
+                    context.kind.as_str(),
+                    context.initiator_name(),
+                    context.session_id,
+                    now.to_rfc3339(),
+                    request_id.to_string(),
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut updated_issue = issue.clone();
+        updated_issue.state = resolution.target_state();
+        updated_issue.revision += 1;
+        updated_issue.updated_at = now;
+        let mut resolution_metadata =
+            resolution.event_metadata(issue.state, updated_issue.revision);
+        resolution_metadata
+            .as_object_mut()
+            .expect("decision resolution metadata is an object")
+            .insert("request_id".to_owned(), request_id.to_string().into());
+        let event_metadata = Self::event_metadata(resolution_metadata, context)?;
+        Self::insert_domain_event(
+            &transaction,
+            &updated_issue,
+            resolution.event_type(),
+            &event_metadata,
+            now,
+        )?;
+        let issue_id_string = updated_issue.id.to_string();
+        let project_name = Self::project_name_in_transaction(&transaction, project_id)?;
+        let audit_metadata = serde_json::json!({
+            "request_id": request_id,
+            "revision": updated_issue.revision,
+        })
+        .to_string();
+        Self::insert_audit_event(
+            &transaction,
+            AuditInsert {
+                operation: "decision_resolve",
+                success: true,
+                context,
+                target: Some(("issue", &issue_id_string)),
+                project: Some((project_id, &project_name)),
+                revision: Some(updated_issue.revision),
+                started_at: now,
+                exit_code: 0,
+                changed_fields: resolution.changed_fields(),
+                metadata_json: &audit_metadata,
+            },
+        )?;
+        request.status = "resolved".to_owned();
+        request.answer = Some(answer.to_owned());
+        request.resolver_kind = Some(context.kind);
+        request.resolver_name = context.initiator_name().map(str::to_owned);
+        request.resolver_session_id = context.session_id.clone();
+        request.resolved_at = Some(now);
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(request)
+    }
+
+    pub fn add_dependency(
+        &mut self,
+        blocker: &crate::domain::IssueReference,
+        blocked: &crate::domain::IssueReference,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::IssueDependency, crate::error::AppError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::AppError::from)?;
+        let blocker_issue = Self::issue_reference_in_transaction(&transaction, blocker)?;
+        let blocked_issue = Self::issue_reference_in_transaction(&transaction, blocked)?;
+        if blocker_issue.id == blocked_issue.id {
+            return Err(crate::error::AppError::Conflict(
+                "an Issue cannot block itself".to_owned(),
+            ));
+        }
+        let duplicate = transaction
+            .query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM issue_dependencies
+                     WHERE blocker_issue_id = ?1 AND blocked_issue_id = ?2
+                 )",
+                rusqlite::params![blocker_issue.id.to_string(), blocked_issue.id.to_string()],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(crate::error::AppError::from)?;
+        if duplicate {
+            return Err(crate::error::AppError::Conflict(
+                "dependency already exists".to_owned(),
+            ));
+        }
+        let creates_cycle = transaction
+            .query_row(
+                "WITH RECURSIVE reachable(issue_id) AS (
+                     SELECT ?1
+                     UNION
+                     SELECT dependency.blocked_issue_id
+                     FROM issue_dependencies dependency
+                     JOIN reachable ON dependency.blocker_issue_id = reachable.issue_id
+                 )
+                 SELECT EXISTS(
+                     SELECT 1 FROM reachable WHERE issue_id = ?2
+                 )",
+                rusqlite::params![blocked_issue.id.to_string(), blocker_issue.id.to_string()],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(crate::error::AppError::from)?;
+        if creates_cycle {
+            return Err(crate::error::AppError::Conflict(
+                "dependency would create a cycle".to_owned(),
+            ));
+        }
+
+        let created_at = chrono::Utc::now();
+        transaction
+            .execute(
+                "INSERT INTO issue_dependencies
+                 (id, blocker_issue_id, blocked_issue_id, relation, created_at)
+                 VALUES (?1, ?2, ?3, 'blocks', ?4)",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    blocker_issue.id.to_string(),
+                    blocked_issue.id.to_string(),
+                    created_at.to_rfc3339(),
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        let metadata = Self::event_metadata(
+            serde_json::json!({
+                "blocker": blocker.label(),
+                "blocked": blocked.label(),
+            }),
+            context,
+        )?;
+        transaction
+            .execute(
+                "INSERT INTO domain_events
+                 (id, sequence, project_id, issue_id, event_type, metadata_json, created_at)
+                 VALUES (?1, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM domain_events),
+                         ?2, ?3, 'issue_dependency_added', ?4, ?5)",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    blocked_issue.project_id.to_string(),
+                    blocked_issue.id.to_string(),
+                    metadata,
+                    created_at.to_rfc3339(),
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        let blocked_id = blocked_issue.id.to_string();
+        let blocked_project =
+            Self::project_name_in_transaction(&transaction, blocked_issue.project_id)?;
+        Self::insert_audit_event(
+            &transaction,
+            AuditInsert {
+                operation: "issue_dependency_add",
+                success: true,
+                context,
+                target: Some(("issue", &blocked_id)),
+                project: Some((blocked_issue.project_id, &blocked_project)),
+                revision: None,
+                started_at: created_at,
+                exit_code: 0,
+                changed_fields: &["dependencies"],
+                metadata_json: "{}",
+            },
+        )?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(crate::domain::IssueDependency {
+            blocker: blocker.label(),
+            blocked: blocked.label(),
+            relation: "blocks",
+            created_at,
+        })
+    }
+
+    pub fn remove_dependency(
+        &mut self,
+        blocker: &crate::domain::IssueReference,
+        blocked: &crate::domain::IssueReference,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::IssueDependency, crate::error::AppError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::AppError::from)?;
+        let blocker_issue = Self::issue_reference_in_transaction(&transaction, blocker)?;
+        let blocked_issue = Self::issue_reference_in_transaction(&transaction, blocked)?;
+        let created_at_text = transaction
+            .query_row(
+                "SELECT created_at FROM issue_dependencies
+                 WHERE blocker_issue_id = ?1 AND blocked_issue_id = ?2",
+                rusqlite::params![blocker_issue.id.to_string(), blocked_issue.id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    crate::error::AppError::NotFound("dependency not found".to_owned())
+                }
+                error => crate::error::AppError::from(error),
+            })?;
+        transaction
+            .execute(
+                "DELETE FROM issue_dependencies
+                 WHERE blocker_issue_id = ?1 AND blocked_issue_id = ?2",
+                rusqlite::params![blocker_issue.id.to_string(), blocked_issue.id.to_string()],
+            )
+            .map_err(crate::error::AppError::from)?;
+        let created_at = Self::parse_timestamp(&created_at_text)?;
+        let event_time = chrono::Utc::now();
+        let metadata = Self::event_metadata(
+            serde_json::json!({
+                "blocker": blocker.label(),
+                "blocked": blocked.label(),
+            }),
+            context,
+        )?;
+        transaction
+            .execute(
+                "INSERT INTO domain_events
+                 (id, sequence, project_id, issue_id, event_type, metadata_json, created_at)
+                 VALUES (?1, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM domain_events),
+                         ?2, ?3, 'issue_dependency_removed', ?4, ?5)",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    blocked_issue.project_id.to_string(),
+                    blocked_issue.id.to_string(),
+                    metadata,
+                    event_time.to_rfc3339(),
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        let blocked_id = blocked_issue.id.to_string();
+        let blocked_project =
+            Self::project_name_in_transaction(&transaction, blocked_issue.project_id)?;
+        Self::insert_audit_event(
+            &transaction,
+            AuditInsert {
+                operation: "issue_dependency_remove",
+                success: true,
+                context,
+                target: Some(("issue", &blocked_id)),
+                project: Some((blocked_issue.project_id, &blocked_project)),
+                revision: None,
+                started_at: event_time,
+                exit_code: 0,
+                changed_fields: &["dependencies"],
+                metadata_json: "{}",
+            },
+        )?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(crate::domain::IssueDependency {
+            blocker: blocker.label(),
+            blocked: blocked.label(),
+            relation: "blocks",
+            created_at,
+        })
+    }
+
+    pub fn list_dependencies(
+        &self,
+        reference: &crate::domain::IssueReference,
+    ) -> Result<Vec<crate::domain::IssueDependency>, crate::error::AppError> {
+        let issue = self.issue_reference(reference)?;
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT blocker_project.name, blocker.number,
+                        blocked_project.name, blocked.number, dependency.created_at
+                 FROM issue_dependencies dependency
+                 JOIN issues blocker ON blocker.id = dependency.blocker_issue_id
+                 JOIN projects blocker_project ON blocker_project.id = blocker.project_id
+                 JOIN issues blocked ON blocked.id = dependency.blocked_issue_id
+                 JOIN projects blocked_project ON blocked_project.id = blocked.project_id
+                 WHERE dependency.blocker_issue_id = ?1 OR dependency.blocked_issue_id = ?1
+                 ORDER BY dependency.created_at ASC",
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut rows = statement
+            .query([issue.id.to_string()])
+            .map_err(crate::error::AppError::from)?;
+        let mut dependencies = Vec::new();
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
+            dependencies.push(Self::dependency_from_row(row)?);
+        }
+        Ok(dependencies)
+    }
+
+    pub fn set_parent(
+        &mut self,
+        child: &crate::domain::IssueReference,
+        parent: &crate::domain::IssueReference,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::IssueParent, crate::error::AppError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::AppError::from)?;
+        let child_issue = Self::issue_reference_in_transaction(&transaction, child)?;
+        let parent_issue = Self::issue_reference_in_transaction(&transaction, parent)?;
+        if child_issue.id == parent_issue.id {
+            return Err(crate::error::AppError::Conflict(
+                "an Issue cannot be its own parent".to_owned(),
+            ));
+        }
+        let child_has_parent = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM issue_parents WHERE child_issue_id = ?1)",
+                [child_issue.id.to_string()],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(crate::error::AppError::from)?;
+        if child_has_parent {
+            return Err(crate::error::AppError::Conflict(
+                "Issue already has a parent".to_owned(),
+            ));
+        }
+        let child_has_children = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM issue_parents WHERE parent_issue_id = ?1)",
+                [child_issue.id.to_string()],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(crate::error::AppError::from)?;
+        if child_has_children {
+            return Err(crate::error::AppError::Conflict(
+                "parent nesting is limited to one level".to_owned(),
+            ));
+        }
+        let parent_has_parent = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM issue_parents WHERE child_issue_id = ?1)",
+                [parent_issue.id.to_string()],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(crate::error::AppError::from)?;
+        if parent_has_parent {
+            return Err(crate::error::AppError::Conflict(
+                "parent nesting is limited to one level".to_owned(),
+            ));
+        }
+        let created_at = chrono::Utc::now();
+        transaction
+            .execute(
+                "INSERT INTO issue_parents (child_issue_id, parent_issue_id, created_at)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![
+                    child_issue.id.to_string(),
+                    parent_issue.id.to_string(),
+                    created_at.to_rfc3339(),
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        let metadata = Self::event_metadata(
+            serde_json::json!({ "child": child.label(), "parent": parent.label() }),
+            context,
+        )?;
+        transaction
+            .execute(
+                "INSERT INTO domain_events
+                 (id, sequence, project_id, issue_id, event_type, metadata_json, created_at)
+                 VALUES (?1, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM domain_events),
+                         ?2, ?3, 'issue_parent_set', ?4, ?5)",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    child_issue.project_id.to_string(),
+                    child_issue.id.to_string(),
+                    metadata,
+                    created_at.to_rfc3339(),
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        let child_id = child_issue.id.to_string();
+        let child_project =
+            Self::project_name_in_transaction(&transaction, child_issue.project_id)?;
+        Self::insert_audit_event(
+            &transaction,
+            AuditInsert {
+                operation: "issue_parent_set",
+                success: true,
+                context,
+                target: Some(("issue", &child_id)),
+                project: Some((child_issue.project_id, &child_project)),
+                revision: None,
+                started_at: created_at,
+                exit_code: 0,
+                changed_fields: &["parent"],
+                metadata_json: "{}",
+            },
+        )?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(crate::domain::IssueParent {
+            child: child.label(),
+            parent: parent.label(),
+            created_at,
+        })
+    }
+
+    pub fn list_parent(
+        &self,
+        reference: &crate::domain::IssueReference,
+    ) -> Result<Vec<crate::domain::IssueParent>, crate::error::AppError> {
+        let issue = self.issue_reference(reference)?;
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT child_project.name, child.number,
+                        parent_project.name, parent.number, relation.created_at
+                 FROM issue_parents relation
+                 JOIN issues child ON child.id = relation.child_issue_id
+                 JOIN projects child_project ON child_project.id = child.project_id
+                 JOIN issues parent ON parent.id = relation.parent_issue_id
+                 JOIN projects parent_project ON parent_project.id = parent.project_id
+                 WHERE relation.child_issue_id = ?1",
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut rows = statement
+            .query([issue.id.to_string()])
+            .map_err(crate::error::AppError::from)?;
+        let mut parents = Vec::new();
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
+            parents.push(Self::parent_from_row(row)?);
+        }
+        Ok(parents)
+    }
+
+    pub fn claim_issue(
+        &mut self,
+        project: Option<&str>,
+        number: Option<i64>,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::ClaimedIssue, crate::error::AppError> {
+        let (agent, session_id) = Self::agent_session(context)?;
+        if number.is_some_and(|number| number < 1) {
+            return Err(crate::error::AppError::InvalidInput(
+                "issue number must be positive".to_owned(),
+            ));
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::AppError::from)?;
+        let issue = match number {
+            Some(number) => {
+                let project = project.ok_or_else(|| {
+                    crate::error::AppError::InvalidInput(
+                        "--project is required when claiming an Issue by number".to_owned(),
+                    )
+                })?;
+                let reference = crate::domain::IssueReference {
+                    project: project.to_owned(),
+                    number,
+                };
+                let issue = Self::issue_reference_in_transaction(&transaction, &reference)?;
+                Self::ensure_claimable(&transaction, &issue)?;
+                issue
+            }
+            None => {
+                let mut sql = String::from(
+                    "SELECT i.id, i.project_id, i.number, i.title, i.body, i.state,
+                            i.priority, i.assignee_kind, i.assignee_name, i.revision,
+                            i.created_at, i.updated_at
+                     FROM issues i
+                     JOIN projects p ON p.id = i.project_id
+                     WHERE i.state = 'todo'
+                       AND NOT EXISTS (
+                           SELECT 1 FROM issue_dependencies dependency
+                           JOIN issues blocker ON blocker.id = dependency.blocker_issue_id
+                           WHERE dependency.blocked_issue_id = i.id
+                             AND blocker.state NOT IN ('done', 'cancelled')
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1 FROM decision_requests request
+                           WHERE request.issue_id = i.id AND request.status = 'open'
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1 FROM issue_leases lease WHERE lease.issue_id = i.id
+                       )",
+                );
+                let mut parameters = Vec::<rusqlite::types::Value>::new();
+                if let Some(project) = project {
+                    sql.push_str(" AND p.name = ?");
+                    parameters.push(project.to_owned().into());
+                }
+                sql.push_str(
+                    " ORDER BY CASE i.priority
+                           WHEN 'critical' THEN 0 WHEN 'high' THEN 1
+                           WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
+                           i.created_at ASC, p.name ASC, i.number ASC
+                       LIMIT 1",
+                );
+                let mut statement = transaction
+                    .prepare(&sql)
+                    .map_err(crate::error::AppError::from)?;
+                statement
+                    .query_row(
+                        rusqlite::params_from_iter(parameters.iter()),
+                        Self::issue_from_row,
+                    )
+                    .map_err(|error| match error {
+                        rusqlite::Error::QueryReturnedNoRows => {
+                            crate::error::AppError::NotFound("no claimable Issue found".to_owned())
+                        }
+                        error => crate::error::AppError::from(error),
+                    })?
+            }
+        };
+
+        let now = chrono::Utc::now();
+        let expires_at = now + chrono::Duration::minutes(LEASE_TTL_MINUTES);
+        let changed = transaction
+            .execute(
+                "UPDATE issues
+                 SET state = 'in_progress', assignee_kind = 'agent', assignee_name = ?1,
+                     revision = revision + 1, updated_at = ?2
+                 WHERE id = ?3 AND revision = ?4 AND state = 'todo'",
+                rusqlite::params![
+                    agent,
+                    now.to_rfc3339(),
+                    issue.id.to_string(),
+                    issue.revision
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        if changed == 0 {
+            let current_revision = transaction
+                .query_row(
+                    "SELECT revision FROM issues WHERE id = ?1",
+                    [issue.id.to_string()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => {
+                        crate::error::AppError::NotFound("issue not found".to_owned())
+                    }
+                    error => crate::error::AppError::from(error),
+                })?;
+            return Err(crate::error::AppError::RevisionConflict { current_revision });
+        }
+        transaction
+            .execute(
+                "INSERT INTO issue_leases
+                 (issue_id, agent, session_id, claimed_at, heartbeat_at, expires_at, lease_revision)
+                 VALUES (?1, ?2, ?3, ?4, ?4, ?5, 1)",
+                rusqlite::params![
+                    issue.id.to_string(),
+                    agent,
+                    session_id,
+                    now.to_rfc3339(),
+                    expires_at.to_rfc3339(),
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut updated_issue = issue.clone();
+        updated_issue.state = crate::domain::IssueState::InProgress;
+        updated_issue.assignee_kind = Some(crate::domain::AssigneeKind::Agent);
+        updated_issue.assignee_name = Some(agent.to_owned());
+        updated_issue.revision += 1;
+        updated_issue.updated_at = now;
+        let metadata = Self::event_metadata(
+            serde_json::json!({
+                "revision": updated_issue.revision,
+                "lease_expires_at": expires_at.to_rfc3339(),
+            }),
+            context,
+        )?;
+        Self::insert_domain_event(
+            &transaction,
+            &updated_issue,
+            "issue_claimed",
+            &metadata,
+            now,
+        )?;
+        let issue_id = updated_issue.id.to_string();
+        let project_name =
+            Self::project_name_in_transaction(&transaction, updated_issue.project_id)?;
+        let audit_metadata = serde_json::json!({
+            "revision": updated_issue.revision,
+            "expires_at": expires_at.to_rfc3339(),
+        })
+        .to_string();
+        Self::insert_audit_event(
+            &transaction,
+            AuditInsert {
+                operation: "issue_claim",
+                success: true,
+                context,
+                target: Some(("issue", &issue_id)),
+                project: Some((updated_issue.project_id, &project_name)),
+                revision: Some(updated_issue.revision),
+                started_at: now,
+                exit_code: 0,
+                changed_fields: &["state", "assignee_kind", "assignee_name"],
+                metadata_json: &audit_metadata,
+            },
+        )?;
+        let lease = crate::domain::IssueLease {
+            agent: agent.to_owned(),
+            session_id: session_id.to_owned(),
+            claimed_at: now,
+            heartbeat_at: now,
+            expires_at,
+            lease_revision: 1,
+            stale: false,
+        };
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(crate::domain::ClaimedIssue {
+            issue: updated_issue,
+            lease,
+        })
+    }
+
+    pub fn heartbeat_issue(
+        &mut self,
+        issue: &crate::domain::Issue,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::ClaimedIssue, crate::error::AppError> {
+        let (agent, session_id) = Self::agent_session(context)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::AppError::from)?;
+        let current = Self::lease_in_transaction(&transaction, issue.id)?;
+        if current.agent != agent || current.session_id != session_id {
+            return Err(crate::error::AppError::Conflict(
+                "lease is owned by another agent session".to_owned(),
+            ));
+        }
+        let now = chrono::Utc::now();
+        if current.expires_at <= now {
+            return Err(crate::error::AppError::Conflict(
+                "lease has expired; use takeover with a reason".to_owned(),
+            ));
+        }
+        let expires_at = now + chrono::Duration::minutes(LEASE_TTL_MINUTES);
+        transaction
+            .execute(
+                "UPDATE issue_leases
+                 SET heartbeat_at = ?1, expires_at = ?2, lease_revision = lease_revision + 1
+                 WHERE issue_id = ?3 AND agent = ?4 AND session_id = ?5",
+                rusqlite::params![
+                    now.to_rfc3339(),
+                    expires_at.to_rfc3339(),
+                    issue.id.to_string(),
+                    agent,
+                    session_id,
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        let lease = Self::lease_in_transaction(&transaction, issue.id)?;
+        let issue = Self::issue_in_transaction(&transaction, issue.project_id, issue.number)?;
+        let issue_id = issue.id.to_string();
+        let project_name = Self::project_name_in_transaction(&transaction, issue.project_id)?;
+        let audit_metadata = serde_json::json!({
+            "expires_at": expires_at.to_rfc3339(),
+            "lease_revision": lease.lease_revision,
+        })
+        .to_string();
+        Self::insert_audit_event(
+            &transaction,
+            AuditInsert {
+                operation: "issue_heartbeat",
+                success: true,
+                context,
+                target: Some(("issue", &issue_id)),
+                project: Some((issue.project_id, &project_name)),
+                revision: Some(issue.revision),
+                started_at: now,
+                exit_code: 0,
+                changed_fields: &[],
+                metadata_json: &audit_metadata,
+            },
+        )?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(crate::domain::ClaimedIssue { issue, lease })
+    }
+
+    pub fn takeover_issue(
+        &mut self,
+        issue: &crate::domain::Issue,
+        reason: &str,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::ClaimedIssue, crate::error::AppError> {
+        let (agent, session_id) = Self::agent_session(context)?;
+        if reason.trim().is_empty() {
+            return Err(crate::error::AppError::InvalidInput(
+                "takeover reason must not be empty".to_owned(),
+            ));
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::AppError::from)?;
+        let current = Self::lease_in_transaction(&transaction, issue.id)?;
+        let now = chrono::Utc::now();
+        if current.expires_at > now {
+            return Err(crate::error::AppError::Conflict(
+                "lease is still active".to_owned(),
+            ));
+        }
+        let expires_at = now + chrono::Duration::minutes(LEASE_TTL_MINUTES);
+        let updated = transaction
+            .execute(
+                "UPDATE issues
+                 SET state = 'in_progress', assignee_kind = 'agent', assignee_name = ?1,
+                     revision = revision + 1, updated_at = ?2
+                 WHERE id = ?3 AND revision = ?4",
+                rusqlite::params![
+                    agent,
+                    now.to_rfc3339(),
+                    issue.id.to_string(),
+                    issue.revision
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        if updated == 0 {
+            let current_revision = transaction
+                .query_row(
+                    "SELECT revision FROM issues WHERE id = ?1",
+                    [issue.id.to_string()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(crate::error::AppError::from)?;
+            return Err(crate::error::AppError::RevisionConflict { current_revision });
+        }
+        transaction
+            .execute(
+                "UPDATE issue_leases
+                 SET agent = ?1, session_id = ?2, claimed_at = ?3,
+                     heartbeat_at = ?3, expires_at = ?4, lease_revision = lease_revision + 1
+                 WHERE issue_id = ?5",
+                rusqlite::params![
+                    agent,
+                    session_id,
+                    now.to_rfc3339(),
+                    expires_at.to_rfc3339(),
+                    issue.id.to_string(),
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut updated_issue = issue.clone();
+        updated_issue.state = crate::domain::IssueState::InProgress;
+        updated_issue.assignee_kind = Some(crate::domain::AssigneeKind::Agent);
+        updated_issue.assignee_name = Some(agent.to_owned());
+        updated_issue.revision += 1;
+        updated_issue.updated_at = now;
+        let metadata = Self::event_metadata(
+            serde_json::json!({
+                "revision": updated_issue.revision,
+                "reason": reason,
+                "lease_expires_at": expires_at.to_rfc3339(),
+            }),
+            context,
+        )?;
+        Self::insert_domain_event(
+            &transaction,
+            &updated_issue,
+            "issue_taken_over",
+            &metadata,
+            now,
+        )?;
+        let issue_id = updated_issue.id.to_string();
+        let project_name =
+            Self::project_name_in_transaction(&transaction, updated_issue.project_id)?;
+        let audit_metadata = serde_json::json!({
+            "reason": reason,
+            "expires_at": expires_at.to_rfc3339(),
+        })
+        .to_string();
+        Self::insert_audit_event(
+            &transaction,
+            AuditInsert {
+                operation: "issue_takeover",
+                success: true,
+                context,
+                target: Some(("issue", &issue_id)),
+                project: Some((updated_issue.project_id, &project_name)),
+                revision: Some(updated_issue.revision),
+                started_at: now,
+                exit_code: 0,
+                changed_fields: &["state", "assignee_kind", "assignee_name"],
+                metadata_json: &audit_metadata,
+            },
+        )?;
+        let lease = Self::lease_in_transaction(&transaction, updated_issue.id)?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(crate::domain::ClaimedIssue {
+            issue: updated_issue,
+            lease,
+        })
+    }
+
     pub fn list_issues(
         &self,
         filter: &crate::domain::IssueFilter,
@@ -755,6 +1827,166 @@ impl Database {
             });
         }
         Ok(issues)
+    }
+
+    pub fn list_stale_issues(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<crate::domain::IssueListItem>, crate::error::AppError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT p.name, i.id, i.project_id, i.number, i.title, i.body, i.state,
+                        i.priority, i.assignee_kind, i.assignee_name, i.revision,
+                        i.created_at, i.updated_at
+                 FROM issues i
+                 JOIN projects p ON p.id = i.project_id
+                 JOIN issue_leases lease ON lease.issue_id = i.id
+                 WHERE i.state = 'in_progress' AND lease.expires_at <= ?1
+                 ORDER BY i.updated_at ASC, p.name ASC, i.number ASC",
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut rows = statement
+            .query([now.to_rfc3339()])
+            .map_err(crate::error::AppError::from)?;
+        let mut issues = Vec::new();
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
+            issues.push(crate::domain::IssueListItem {
+                project: row.get(0).map_err(crate::error::AppError::from)?,
+                issue: Self::issue_from_row_at(row, 1).map_err(crate::error::AppError::from)?,
+            });
+        }
+        Ok(issues)
+    }
+
+    pub fn list_attention_issues(
+        &self,
+    ) -> Result<Vec<crate::domain::IssueListItem>, crate::error::AppError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT p.name, i.id, i.project_id, i.number, i.title, i.body, i.state,
+                        i.priority, i.assignee_kind, i.assignee_name, i.revision,
+                        i.created_at, i.updated_at
+                 FROM issues i
+                 JOIN projects p ON p.id = i.project_id
+                 WHERE EXISTS (
+                     SELECT 1 FROM decision_requests request
+                     WHERE request.issue_id = i.id AND request.status = 'open'
+                 )
+                 ORDER BY i.updated_at ASC, p.name ASC, i.number ASC",
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut rows = statement.query([]).map_err(crate::error::AppError::from)?;
+        let mut issues = Vec::new();
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
+            issues.push(crate::domain::IssueListItem {
+                project: row.get(0).map_err(crate::error::AppError::from)?,
+                issue: Self::issue_from_row_at(row, 1).map_err(crate::error::AppError::from)?,
+            });
+        }
+        Ok(issues)
+    }
+
+    pub fn list_events(
+        &self,
+        after: i64,
+        limit: usize,
+        include_issue: bool,
+    ) -> Result<crate::domain::EventPage, crate::error::AppError> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(crate::error::AppError::from)?;
+        let mut statement = transaction
+            .prepare(
+                "SELECT sequence, event_type, project_id, issue_id, metadata_json, created_at
+                 FROM domain_events
+                 WHERE sequence > ?1
+                 ORDER BY sequence ASC
+                 LIMIT ?2",
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut rows = statement
+            .query(rusqlite::params![after, i64::try_from(limit + 1).unwrap()])
+            .map_err(crate::error::AppError::from)?;
+        let mut raw_events = Vec::new();
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
+            raw_events.push((
+                row.get::<_, i64>(0).map_err(crate::error::AppError::from)?,
+                row.get::<_, String>(1)
+                    .map_err(crate::error::AppError::from)?,
+                row.get::<_, Option<String>>(2)
+                    .map_err(crate::error::AppError::from)?,
+                row.get::<_, Option<String>>(3)
+                    .map_err(crate::error::AppError::from)?,
+                row.get::<_, String>(4)
+                    .map_err(crate::error::AppError::from)?,
+                row.get::<_, String>(5)
+                    .map_err(crate::error::AppError::from)?,
+            ));
+        }
+        drop(rows);
+        drop(statement);
+
+        let has_more = raw_events.len() > limit;
+        if has_more {
+            raw_events.pop();
+        }
+        let next_cursor = raw_events.last().map_or(after, |event| event.0);
+        let mut events = Vec::with_capacity(raw_events.len());
+        for (sequence, event_type, project_id, issue_id, metadata_json, created_at) in raw_events {
+            let metadata: serde_json::Value = serde_json::from_str(&metadata_json)
+                .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
+            let project_id = project_id
+                .map(|value| {
+                    uuid::Uuid::parse_str(&value)
+                        .map_err(|error| crate::error::AppError::Internal(error.to_string()))
+                })
+                .transpose()?;
+            let issue_id = issue_id
+                .map(|value| {
+                    uuid::Uuid::parse_str(&value)
+                        .map_err(|error| crate::error::AppError::Internal(error.to_string()))
+                })
+                .transpose()?;
+            let issue = if include_issue {
+                match issue_id {
+                    Some(issue_id) => match transaction.query_row(
+                        "SELECT id, project_id, number, title, body, state,
+                                priority, assignee_kind, assignee_name, revision,
+                                created_at, updated_at
+                         FROM issues WHERE id = ?1",
+                        [issue_id.to_string()],
+                        Self::issue_from_row,
+                    ) {
+                        Ok(issue) => Some(issue),
+                        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                        Err(error) => return Err(crate::error::AppError::from(error)),
+                    },
+                    None => None,
+                }
+            } else {
+                None
+            };
+            let created_at = Self::parse_timestamp(&created_at)?;
+            events.push(crate::domain::EventRecord {
+                sequence,
+                event_type: event_type.clone(),
+                project_id,
+                issue_id,
+                changed_fields: Self::event_changed_fields(&event_type, &metadata),
+                revision: metadata.get("revision").and_then(serde_json::Value::as_i64),
+                created_at,
+                issue,
+            });
+        }
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(crate::domain::EventPage {
+            next_cursor,
+            has_more,
+            events,
+        })
     }
 
     pub fn list_audit_events(
@@ -1059,6 +2291,16 @@ impl Database {
                 | "issue_edit"
                 | "issue_comment"
                 | "issue_history"
+                | "issue_dependency_add"
+                | "issue_dependency_remove"
+                | "issue_dependency_list"
+                | "issue_parent_set"
+                | "issue_parent_list"
+                | "issue_claim"
+                | "issue_heartbeat"
+                | "issue_takeover"
+                | "decision_request"
+                | "decision_resolve"
                 | "issue_start"
                 | "issue_block"
                 | "issue_resume"
@@ -1071,9 +2313,27 @@ impl Database {
     fn allowed_target_kind(operation: &str) -> Option<&'static str> {
         match operation {
             "project_create" => Some("project"),
-            "issue_create" | "issue_show" | "issue_edit" | "issue_comment" | "issue_history"
-            | "issue_start" | "issue_block" | "issue_resume" | "issue_complete"
-            | "issue_cancel" | "issue_reopen" => Some("issue"),
+            "issue_create"
+            | "issue_show"
+            | "issue_edit"
+            | "issue_comment"
+            | "issue_history"
+            | "issue_dependency_add"
+            | "issue_dependency_remove"
+            | "issue_dependency_list"
+            | "issue_parent_set"
+            | "issue_parent_list"
+            | "issue_claim"
+            | "issue_heartbeat"
+            | "issue_takeover"
+            | "decision_request"
+            | "decision_resolve"
+            | "issue_start"
+            | "issue_block"
+            | "issue_resume"
+            | "issue_complete"
+            | "issue_cancel"
+            | "issue_reopen" => Some("issue"),
             _ => None,
         }
     }
@@ -1086,6 +2346,16 @@ impl Database {
                 | "issue_edit"
                 | "issue_comment"
                 | "issue_history"
+                | "issue_dependency_add"
+                | "issue_dependency_remove"
+                | "issue_dependency_list"
+                | "issue_parent_set"
+                | "issue_parent_list"
+                | "issue_claim"
+                | "issue_heartbeat"
+                | "issue_takeover"
+                | "decision_request"
+                | "decision_resolve"
                 | "issue_start"
                 | "issue_block"
                 | "issue_resume"
@@ -1107,6 +2377,22 @@ impl Database {
                 "assignee_name",
             ],
             "issue_comment" => &["comment", "updated_at"],
+            "issue_dependency_add" | "issue_dependency_remove" => &["dependencies"],
+            "issue_dependency_list" => &[],
+            "issue_parent_set" => &["parent"],
+            "issue_parent_list" => &[],
+            "issue_claim" => &["state", "assignee_kind", "assignee_name"],
+            "issue_heartbeat" => &[],
+            "issue_takeover" => &["state", "assignee_kind", "assignee_name"],
+            "decision_request" => &["state", "decision_request"],
+            "decision_resolve" => &[
+                "decision",
+                "state",
+                "reason",
+                "wait_kind",
+                "summary",
+                "verification",
+            ],
             "issue_start" | "issue_resume" => &["state"],
             "issue_block" => &["state", "reason", "wait_kind"],
             "issue_complete" => &["state", "summary", "verification"],
@@ -1318,6 +2604,304 @@ impl Database {
             })
     }
 
+    fn issue_reference(
+        &self,
+        reference: &crate::domain::IssueReference,
+    ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        let project_id = self.project_id(&reference.project)?;
+        self.connection
+            .query_row(
+                "SELECT id, project_id, number, title, body, state, priority, assignee_kind,
+                        assignee_name, revision, created_at, updated_at
+                 FROM issues WHERE project_id = ?1 AND number = ?2",
+                rusqlite::params![project_id.to_string(), reference.number],
+                Self::issue_from_row,
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    crate::error::AppError::NotFound("issue not found".to_owned())
+                }
+                error => crate::error::AppError::from(error),
+            })
+    }
+
+    fn issue_reference_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        reference: &crate::domain::IssueReference,
+    ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        let project_id = Self::project_id_in_transaction(transaction, &reference.project)?;
+        Self::issue_in_transaction(transaction, project_id, reference.number)
+    }
+
+    fn agent_session(
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<(&str, &str), crate::error::AppError> {
+        if context.kind != crate::domain::InitiatorKind::Agent {
+            return Err(crate::error::AppError::InvalidInput(
+                "agent execution context is required".to_owned(),
+            ));
+        }
+        let agent = context.agent.as_deref().ok_or_else(|| {
+            crate::error::AppError::InvalidInput("BETTR_AGENT is required".to_owned())
+        })?;
+        let session_id = context.session_id.as_deref().ok_or_else(|| {
+            crate::error::AppError::InvalidInput("BETTR_SESSION_ID is required".to_owned())
+        })?;
+        Ok((agent, session_id))
+    }
+
+    fn ensure_claimable(
+        transaction: &rusqlite::Transaction<'_>,
+        issue: &crate::domain::Issue,
+    ) -> Result<(), crate::error::AppError> {
+        if issue.state != crate::domain::IssueState::Todo {
+            return Err(crate::error::AppError::Conflict(
+                "Issue is not claimable in its current state".to_owned(),
+            ));
+        }
+        let blocked = transaction
+            .query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM issue_dependencies dependency
+                     JOIN issues blocker ON blocker.id = dependency.blocker_issue_id
+                     WHERE dependency.blocked_issue_id = ?1
+                       AND blocker.state NOT IN ('done', 'cancelled')
+                 )",
+                [issue.id.to_string()],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(crate::error::AppError::from)?;
+        if blocked {
+            return Err(crate::error::AppError::Conflict(
+                "Issue has unresolved blocking dependencies".to_owned(),
+            ));
+        }
+        let attention_required = transaction
+            .query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM decision_requests
+                     WHERE issue_id = ?1 AND status = 'open'
+                 )",
+                [issue.id.to_string()],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(crate::error::AppError::from)?;
+        if attention_required {
+            return Err(crate::error::AppError::Conflict(
+                "Issue has an unresolved human decision".to_owned(),
+            ));
+        }
+        let leased = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM issue_leases WHERE issue_id = ?1)",
+                [issue.id.to_string()],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(crate::error::AppError::from)?;
+        if leased {
+            return Err(crate::error::AppError::Conflict(
+                "Issue already has a lease".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn insert_domain_event(
+        transaction: &rusqlite::Transaction<'_>,
+        issue: &crate::domain::Issue,
+        event_type: &str,
+        metadata: &str,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::error::AppError> {
+        transaction
+            .execute(
+                "INSERT INTO domain_events
+                 (id, sequence, project_id, issue_id, event_type, metadata_json, created_at)
+                 VALUES (?1, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM domain_events),
+                         ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    issue.project_id.to_string(),
+                    issue.id.to_string(),
+                    event_type,
+                    metadata,
+                    created_at.to_rfc3339(),
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        Ok(())
+    }
+
+    fn lease_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        issue_id: uuid::Uuid,
+    ) -> Result<crate::domain::IssueLease, crate::error::AppError> {
+        let (agent, session_id, claimed_at, heartbeat_at, expires_at, lease_revision) = transaction
+            .query_row(
+                "SELECT agent, session_id, claimed_at, heartbeat_at, expires_at, lease_revision
+                     FROM issue_leases WHERE issue_id = ?1",
+                [issue_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                },
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    crate::error::AppError::Conflict("lease not found".to_owned())
+                }
+                error => crate::error::AppError::from(error),
+            })?;
+        let expires_at = Self::parse_timestamp(&expires_at)?;
+        Ok(crate::domain::IssueLease {
+            agent,
+            session_id,
+            claimed_at: Self::parse_timestamp(&claimed_at)?,
+            heartbeat_at: Self::parse_timestamp(&heartbeat_at)?,
+            stale: expires_at <= chrono::Utc::now(),
+            expires_at,
+            lease_revision,
+        })
+    }
+
+    fn parse_timestamp(
+        value: &str,
+    ) -> Result<chrono::DateTime<chrono::Utc>, crate::error::AppError> {
+        chrono::DateTime::parse_from_rfc3339(value)
+            .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
+            .map_err(|error| crate::error::AppError::Internal(error.to_string()))
+    }
+
+    fn dependency_from_row(
+        row: &rusqlite::Row<'_>,
+    ) -> Result<crate::domain::IssueDependency, crate::error::AppError> {
+        let blocker_project: String = row.get(0).map_err(crate::error::AppError::from)?;
+        let blocker_number: i64 = row.get(1).map_err(crate::error::AppError::from)?;
+        let blocked_project: String = row.get(2).map_err(crate::error::AppError::from)?;
+        let blocked_number: i64 = row.get(3).map_err(crate::error::AppError::from)?;
+        let created_at: String = row.get(4).map_err(crate::error::AppError::from)?;
+        Ok(crate::domain::IssueDependency {
+            blocker: format!("{blocker_project}#{blocker_number}"),
+            blocked: format!("{blocked_project}#{blocked_number}"),
+            relation: "blocks",
+            created_at: Self::parse_timestamp(&created_at)?,
+        })
+    }
+
+    fn parent_from_row(
+        row: &rusqlite::Row<'_>,
+    ) -> Result<crate::domain::IssueParent, crate::error::AppError> {
+        let child_project: String = row.get(0).map_err(crate::error::AppError::from)?;
+        let child_number: i64 = row.get(1).map_err(crate::error::AppError::from)?;
+        let parent_project: String = row.get(2).map_err(crate::error::AppError::from)?;
+        let parent_number: i64 = row.get(3).map_err(crate::error::AppError::from)?;
+        let created_at: String = row.get(4).map_err(crate::error::AppError::from)?;
+        Ok(crate::domain::IssueParent {
+            child: format!("{child_project}#{child_number}"),
+            parent: format!("{parent_project}#{parent_number}"),
+            created_at: Self::parse_timestamp(&created_at)?,
+        })
+    }
+
+    fn event_changed_fields(event_type: &str, metadata: &serde_json::Value) -> Vec<String> {
+        let fields: Vec<&str> = match event_type {
+            "project_created" => vec!["name"],
+            "issue_created" => vec!["title", "body", "state", "priority"],
+            "issue_updated" => metadata
+                .get("changes")
+                .and_then(serde_json::Value::as_object)
+                .map(|changes| {
+                    changes
+                        .keys()
+                        .filter_map(|field| match field.as_str() {
+                            "title" | "body" | "priority" | "assignee_kind" | "assignee_name" => {
+                                Some(field.as_str())
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            "comment_added" => vec!["comment", "updated_at"],
+            "issue_started" | "issue_resumed" => vec!["state"],
+            "issue_blocked" => vec!["state", "reason", "wait_kind"],
+            "issue_completed" => vec!["state", "summary", "verification"],
+            "issue_cancelled" | "issue_reopened" => vec!["state", "reason"],
+            "issue_dependency_added" | "issue_dependency_removed" => vec!["dependencies"],
+            "issue_parent_set" => vec!["parent"],
+            "issue_claimed" => vec!["state", "assignee_kind", "assignee_name"],
+            "issue_taken_over" => vec!["state", "assignee_kind", "assignee_name"],
+            "decision_requested" => vec!["state", "decision_request"],
+            "decision_resolved" => vec!["decision", "state"],
+            _ => Vec::new(),
+        };
+        fields.into_iter().map(str::to_owned).collect()
+    }
+
+    fn decision_from_row(
+        row: &rusqlite::Row<'_>,
+    ) -> rusqlite::Result<crate::domain::DecisionRequest> {
+        let parse_error = |error: Box<dyn std::error::Error + Send + Sync>| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, error)
+        };
+        let id: String = row.get(0)?;
+        let project: String = row.get(1)?;
+        let number: i64 = row.get(2)?;
+        let requester_kind: Option<String> = row.get(5)?;
+        let resolver_kind: Option<String> = row.get(10)?;
+        let parse_kind = |value: Option<String>| {
+            value
+                .map(|value| match value.as_str() {
+                    "agent" => Ok(crate::domain::InitiatorKind::Agent),
+                    "human" => Ok(crate::domain::InitiatorKind::Human),
+                    "system" => Ok(crate::domain::InitiatorKind::System),
+                    _ => Err(crate::error::AppError::Internal(format!(
+                        "invalid decision initiator kind: {value}"
+                    ))),
+                })
+                .transpose()
+        };
+        let created_at: String = row.get(13)?;
+        let resolved_at: Option<String> = row.get(14)?;
+        let id = uuid::Uuid::parse_str(&id).map_err(|error| parse_error(Box::new(error)))?;
+        let requester_kind =
+            parse_kind(requester_kind).map_err(|error| parse_error(Box::new(error)))?;
+        let resolver_kind =
+            parse_kind(resolver_kind).map_err(|error| parse_error(Box::new(error)))?;
+        let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)
+            .map_err(|error| parse_error(Box::new(error)))?
+            .with_timezone(&chrono::Utc);
+        let resolved_at = resolved_at
+            .map(|value| {
+                chrono::DateTime::parse_from_rfc3339(&value)
+                    .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
+                    .map_err(|error| parse_error(Box::new(error)))
+            })
+            .transpose()?;
+        Ok(crate::domain::DecisionRequest {
+            id,
+            issue: format!("{project}#{number}"),
+            question: row.get(3)?,
+            background: row.get(4)?,
+            requester_kind,
+            requester_name: row.get(6)?,
+            requester_session_id: row.get(7)?,
+            status: row.get(8)?,
+            answer: row.get(9)?,
+            resolver_kind,
+            resolver_name: row.get(11)?,
+            resolver_session_id: row.get(12)?,
+            created_at,
+            resolved_at,
+        })
+    }
+
     fn issue_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<crate::domain::Issue> {
         Self::issue_from_row_at(row, 0)
     }
@@ -1517,10 +3101,8 @@ impl Database {
                 crate::store::migrations::BASE_SCHEMA_VERSION,
                 "phase1_baseline",
             ),
-            (
-                crate::store::migrations::LATEST_SCHEMA_VERSION,
-                "schema_migrations",
-            ),
+            (2, "schema_migrations"),
+            (3, "phase_two_coordination"),
         ] {
             transaction
                 .execute(

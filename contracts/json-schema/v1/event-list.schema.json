@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["next_cursor", "has_more", "events"],
+  "properties": {
+    "next_cursor": { "type": "integer", "minimum": 0 },
+    "has_more": { "type": "boolean" },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sequence", "event_type", "changed_fields", "created_at"],
+        "properties": {
+          "sequence": { "type": "integer", "minimum": 1 },
+          "event_type": { "type": "string", "minLength": 1 },
+          "project_id": { "type": ["string", "null"] },
+          "issue_id": { "type": ["string", "null"] },
+          "changed_fields": { "type": "array", "items": { "type": "string" } },
+          "revision": { "type": ["integer", "null"] },
+          "created_at": { "type": "string", "format": "date-time" },
+          "issue": { "type": ["object", "null"] }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -14,6 +14,9 @@ fn help_names_the_product_and_core_commands() {
         .stdout(predicate::str::contains("init"))
         .stdout(predicate::str::contains("project"))
         .stdout(predicate::str::contains("issue"))
+        .stdout(predicate::str::contains("decision"))
+        .stdout(predicate::str::contains("event"))
+        .stdout(predicate::str::contains("capabilities"))
         .stdout(predicate::str::contains("status"))
         .stdout(predicate::str::contains("web"));
 

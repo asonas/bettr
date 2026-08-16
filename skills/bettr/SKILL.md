@@ -1,13 +1,13 @@
 ---
 name: bettr
-description: Use when work is tracked in a bettr Issue or a conversation produces a material decision, requirement change, discovery, risk, blocker, next action, or verification result to record.
+description: Use when work is tracked in a bettr Issue or when an agent needs to coordinate work through the local bettr CLI, including Issue recording, claims, leases, human decisions, dependency checks, status supervision, or event-cursor polling.
 ---
 
 # Bettr Issue Tracking
 
-Treat bettr as the local source of truth for agent work. Use the installed CLI and its JSON contract; never invent flags from another tracker.
+Use bettr as the local source of truth for agent work. Use the installed CLI and the shared JSON contract; do not invent flags from another tracker.
 
-## Setup
+## Start every agent session
 
 1. At the first bettr command in a session, and after a command-not-found or unknown command/option error, verify the binary:
 
@@ -46,24 +46,30 @@ bettr --project bettr --json issue create \
   --priority high
 
 bettr --project bettr --json issue comment 1 \
-  --body "Implemented the change; verification: mise exec -- cargo test"
+  --body "Implemented the change; verification is available"
 ```
 
 Save the returned project-local reference (`bettr#1`) and Issue `revision`. Comments are immutable and do not require a revision. Add a new comment to correct an earlier comment.
 
-For edits and state transitions, fetch the current Issue first and pass its revision:
+For edits and state transitions, fetch the current Issue first and pass its revision. Treat an unqualified Issue number as invalid without explicit project context.
+
+## Capability discovery
+
+Read `.data.capabilities` from `bettr capabilities --json` before selecting a workflow. Use only capabilities whose value is `true`; ignore additive fields and stop with a clear report when the JSON contract version is unsupported. The shared matrix is [../../contracts/capabilities.json](../../contracts/capabilities.json).
+
+The implemented capability names are `issue_dependencies`, `issue_parent`, `issue_claim`, `issue_lease`, `human_decisions`, `event_cursor`, and `capabilities`. Treat `idempotency` as unavailable. Stop when blocked rather than inventing a replacement command.
+
+## Claim and lease workflow
+
+Claim an explicit Issue or let bettr select the first eligible `todo` Issue:
 
 ```sh
-bettr --project bettr --json issue show 1
-bettr --project bettr --json issue edit 1 --revision 1 --title "Updated title"
-bettr --project bettr --json issue start 1 --revision 2
-bettr --project bettr --json issue block 1 --revision 3 \
-  --reason "Waiting for human review" --wait-kind human
-bettr --project bettr --json issue complete 1 --revision 4 \
-  --summary "Implemented" --verification "mise exec -- cargo test"
+bettr issue claim 12 --project bettr --json
+bettr issue claim --project bettr --json
+bettr issue heartbeat 12 --project bettr --json
 ```
 
-Use `resume`, `cancel`, or `reopen` only with their required revision and reason fields. Keep the returned revision for the next write.
+A claim is owned by the `BETTR_AGENT` and `BETTR_SESSION_ID` pair. Heartbeat only renews the lease and does not advance the Issue revision. Keep heartbeats bounded to the expected work interval. A stale lease is not automatically reassigned; use `bettr issue takeover 12 --project bettr --reason "..." --json` only after checking the previous session and recording a concrete reason.
 
 ## Status and Conversation Updates
 
@@ -96,18 +102,70 @@ When a comment or status transition is appropriate:
 
 If an update fails or its result is unknown, inspect Issue history and the audit log before retrying; never retry blindly. If no active Issue is identified, do not create or infer one. Mention a possible update only when useful.
 
+## Record coordination state
+
+Use structured relations when available:
+
+```sh
+bettr issue dependency add bettr#3 bettr#12 --json
+bettr issue parent set bettr#12 bettr#3 --json
+```
+
+When work requires a human choice, create a request and stop agent work on that Issue:
+
+```sh
+bettr decision request 12 --project bettr \
+  --question "Which behavior is intended?" \
+  --background "Both options affect the migration." --json
+```
+
+Do not resolve your own decision request. A human or permitted different resolver must use the request UUID:
+
+```sh
+BETTR_OPERATOR=reviewer bettr decision resolve <request-uuid> \
+  --answer "Use option A" --next-state todo --json
+```
+
+When resolving directly to `blocked`, provide `--reason` and `--wait-kind`; when resolving to `done`, provide `--summary` and `--verification`; when resolving to `cancelled`, provide `--reason`. These resolutions emit the matching Issue transition event. Use `todo` when the agent should claim the Issue again.
+
+An open human decision keeps the Issue in the supervisor's `attention` view and prevents completion. Do not continue by editing around that constraint.
+
+Resolve decisions to `todo`, `blocked`, `done`, or `cancelled`; do not select `in_progress`, because active work must be re-entered through an agent claim and lease.
+
+## Revisions, completion, and polling
+
+Fetch the current Issue before every revision-guarded edit or transition:
+
+```sh
+bettr issue show 12 --project bettr --json
+bettr issue complete 12 --project bettr --revision <current> \
+  --summary "Implemented" --verification "mise exec -- cargo test" --json
+```
+
+On `revision_conflict`, reread the Issue and inspect the intervening history before deciding whether to retry. Never blindly overwrite. On an unknown write outcome, inspect `issue show`, `issue history`, and `audit list` before repeating the write.
+
 ## Handle Failures
 
-- Exit 4 / `revision_conflict`: re-read the Issue, inspect the intervening change, and retry with a deliberate new revision. Never blindly overwrite.
+- Exit 4 / `revision_conflict`: re-read the Issue, inspect the intervening change, and retry only with a deliberate new revision.
 - Exit 3 / `not_found` or `database_not_initialized`: verify `--project`, `bettr context --json`, and the selected database before writing.
 - Exit 5 / `database_busy`: report the contention and retry only when the operation is safe to repeat.
 - If a write returns an unknown outcome, inspect `issue list`, `issue show`, `issue history`, and `audit list` before creating a duplicate.
 
 Use `bettr status --json` for a cross-project supervisor view and `bettr audit list --json` to verify the recorded operation. Do not put raw command lines or secrets in Issue bodies or comments.
 
-## Install This Skill
+For wayfinder-style polling, persist the last returned cursor and request only newer events:
 
-After `skills/bettr` is available on the repository's GitHub default branch, install it with the Codex skill installer:
+```sh
+bettr event list --after <cursor> --limit 100 --include-issue --json
+```
+
+The cursor is exclusive. Consume events in sequence order and advance it only to `next_cursor`; heartbeat renewals, reads, and failures do not appear as domain events.
+
+Use `bettr status --json` for cross-project supervision and stop when an Issue is in `attention` or `stale` until the required human decision or lease handoff is handled. Do not invoke unavailable capabilities, add a daemon, or assume network/authentication behavior.
+
+## Installation
+
+After this repository is available on its default branch, install this skill with the Codex skill installer:
 
 ```sh
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \

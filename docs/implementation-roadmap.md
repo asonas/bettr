@@ -12,9 +12,9 @@ Phase 1では、プロジェクト、Issue、コメント、5状態、履歴、�
 
 ## Phase 2: Agent Coordination
 
-Phase 2では、原子的なclaim、セッション単位のlease、heartbeat、stale表示、理由付きtakeoverを追加します。また、複数の判断要求と人間の判断イベント、Issue間の`blocks`依存、一階層の親子関係、構造化reference、イベントカーソル、冪等性キー、原子的なJSONバッチ更新、`bettr capabilities --json`を実装します。
+Phase 2では、原子的なclaim、セッション単位のlease、heartbeat、stale表示、理由付きtakeover、複数の判断要求と人間の判断イベント、Issue間の`blocks`依存、一階層の親子関係、構造化reference、イベントカーソル、`bettr capabilities --json`を実装します。冪等性キーと原子的なJSONバッチ更新は、別のcapabilityとして未実装のまま明示します。
 
-完了条件は、二つのプロセスが同じIssueを同時にclaimできず、期限切れleaseが自動的に再割当されず、判断要求と回答が個別に対応し、wayfinderがカーソル以降の差分だけを取り込めることです。Phase 1を実際の作業に使い、CLIの名称とJSON契約に必要な修正を反映した後、独立した詳細計画を作成します。
+完了条件は、二つのプロセスが同じIssueを同時にclaimできず、期限切れleaseが自動的に再割当されず、判断要求と回答が個別に対応し、wayfinderがカーソル以降の差分だけを取り込めることです。実装済みのCLIとskillの対応は[`contracts/capabilities.json`](../contracts/capabilities.json)で確認できます。
 
 ## Phase 3: Audit and Operations
 
