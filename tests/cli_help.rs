@@ -14,5 +14,13 @@ fn help_names_the_product_and_core_commands() {
         .stdout(predicate::str::contains("init"))
         .stdout(predicate::str::contains("project"))
         .stdout(predicate::str::contains("issue"))
-        .stdout(predicate::str::contains("status"));
+        .stdout(predicate::str::contains("status"))
+        .stdout(predicate::str::contains("web"));
+
+    Command::cargo_bin("bettr")
+        .unwrap()
+        .args(["web", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--port"));
 }

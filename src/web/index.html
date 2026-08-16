@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>bettr / supervisor view</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">本文へ移動</a>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="メインナビゲーション">
+        <a class="brand" href="#/overview" aria-label="bettr Overview">
+          <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+          <span>bettr</span>
+        </a>
+        <div class="sidebar-label">Supervision</div>
+        <nav class="nav-list">
+          <a href="#/overview" data-nav="overview"><span class="nav-icon" aria-hidden="true">◌</span><span>Overview</span><kbd>G&nbsp;O</kbd></a>
+          <a href="#/projects" data-nav="projects"><span class="nav-icon" aria-hidden="true">▦</span><span>Projects</span></a>
+          <a href="#/recent" data-nav="recent"><span class="nav-icon" aria-hidden="true">◷</span><span>Recent</span></a>
+          <button type="button" class="nav-button" id="search-nav"><span class="nav-icon" aria-hidden="true">⌕</span><span>Search</span><kbd>/</kbd></button>
+        </nav>
+        <div class="sidebar-spacer"></div>
+        <div class="connection-state" id="connection-state" aria-live="polite">
+          <span class="connection-dot" aria-hidden="true"></span>
+          <span>Local database</span>
+        </div>
+        <div class="sidebar-footer">Human on the loop</div>
+      </aside>
+
+      <div class="workspace">
+        <header class="topbar">
+          <div class="breadcrumbs" id="breadcrumbs"><span>Overview</span></div>
+          <div class="topbar-actions">
+            <span class="sync-label" id="sync-label">確認中</span>
+            <button class="icon-button" type="button" id="theme-toggle" aria-label="テーマを切り替え">◐</button>
+          </div>
+        </header>
+
+        <div class="update-banner" id="update-banner" role="status" aria-live="polite" hidden>
+          <span class="update-signal" aria-hidden="true"></span>
+          <span id="update-message">新しい更新があります</span>
+          <button type="button" id="apply-update">更新を表示</button>
+        </div>
+
+        <main id="main" class="main-content" tabindex="-1">
+          <div id="app" aria-busy="true">
+            <div class="loading-state"><span class="loader" aria-hidden="true"></span><span>ローカルデータを読み込んでいます</span></div>
+          </div>
+        </main>
+      </div>
+    </div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

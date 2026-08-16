@@ -4,6 +4,7 @@ mod domain;
 mod error;
 mod output;
 mod store;
+mod web;
 
 fn main() -> std::process::ExitCode {
     let arguments = std::env::args_os().collect::<Vec<_>>();
@@ -304,6 +305,7 @@ fn run(
             }
             Ok(())
         }
+        crate::cli::Command::Web(web_command) => crate::web::run(&database_path, web_command.port),
     }
 }
 

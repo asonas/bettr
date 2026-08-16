@@ -22,6 +22,10 @@ Phase 3では、SQLiteを正本とする追記専用JSON Lines監査ログ、ハ
 
 完了条件は、プロセス停止を挟んでも監査JSONLをSQLiteから復旧でき、改変と欠落を検知でき、稼働中のDBを安全にバックアップでき、秘密内容を消去しても消去操作そのものは追跡できることです。Phase 2までのデータ量と障害事例を確認してから、独立した詳細計画を作成します。
 
+## Local Supervisor Web UI
+
+Web UIはネットワーク共有を目的とせず、`bettr web`でloopbackにだけバインドする読み取り専用の監督ビューとして段階的に追加します。Overview、プロジェクト横断のIssue一覧、Issue詳細のActivity、更新インジケーターを提供し、Issueの変更はCLIから行います。初期実装はRust標準ライブラリのHTTPサーバーと埋め込みアセットを使い、外部のフロントエンドランタイムを要求しません。UIの閲覧フローと更新通知を実運用で確認した後、必要な検索・フィルター・イベントカーソルを別計画に分けます。
+
 ## Skills and Distribution
 
 各Phaseと同時にCodexおよびClaude Code向けの最小スキルを更新します。スキルは利用可能なcapabilityだけを使い、Issue化の基準、競合時の再読込、完了根拠の記録を定めます。配布はMIT Licenseの下でGitHub Releasesから行います。Phase 1の間は`cargo install --path .`によるローカル利用も維持します。

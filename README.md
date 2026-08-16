@@ -62,6 +62,30 @@ bettr issue history 1 --project bettr
 bettr audit list
 ```
 
+## Local supervisor web UI
+
+Start the read-only, loopback-only supervisor view:
+
+```sh
+bettr web
+```
+
+Then open the URL printed by bettr, usually `http://127.0.0.1:4242`. Use
+`--port 0` when an available port should be selected automatically. The
+server never binds to a non-loopback address and keeps the CLI as the only
+mutation path.
+
+The Overview starts with attention-required, stale, blocked, recently
+completed, and active Issues. Projects provides a searchable cross-project
+list, and selecting an Issue opens a URL-addressable detail view with its
+activity and properties. The browser polls the local read API and shows a
+non-blocking update indicator; it does not reorder the visible list until
+you choose `更新を表示`.
+
+The MVP serves embedded assets and has no external network or frontend
+runtime dependency. It is intentionally read-only; use the CLI to create,
+edit, transition, or comment on Issues.
+
 Use the revision returned by the previous write. A stale revision fails with exit code 4 instead of overwriting another process's update.
 
 ## JSON and execution context

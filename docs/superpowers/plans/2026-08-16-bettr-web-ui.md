@@ -31,8 +31,8 @@
 
 **Interfaces:**
 - `Command::Web(WebCommand)` parses `bettr web [--port PORT]`.
-- `App::list_comments(project, number)` returns immutable `Vec<Comment>` with the same audit semantics as other reads.
-- `web::WebServer::new(database_path, port)` owns the loopback listener and dispatches read requests.
+- Issue comments are represented by the existing `DomainEvent` history payload and do not require a new mutation or storage API.
+- `web::run(database_path, port)` owns the loopback listener and dispatches read requests.
 
 - [ ] Write a failing CLI help test asserting `web` and `--port` are documented.
 - [ ] Run `cargo test --test cli_help web` and observe the missing command.
@@ -60,7 +60,7 @@
 - [ ] Write tests that start a listener on an ephemeral loopback port, create a fixture database, and assert status, list, detail, static, and 404 responses.
 - [ ] Run the focused tests and observe failures for the missing module/routes.
 - [ ] Implement a bounded HTTP request parser, path/query decoder, JSON response helper, and one-request-per-connection handler.
-- [ ] Open the database through the existing identity-checked `Database::open` for every request batch/server request boundary as appropriate; never bypass preflight.
+- [ ] Open the database through the existing identity-checked `Database::open` for every HTTP request; never bypass preflight.
 - [ ] Implement the four API routes and static asset routes.
 - [ ] Run the focused tests, then add a concurrency read test for two simultaneous status requests.
 - [ ] Commit the server and endpoint implementation.

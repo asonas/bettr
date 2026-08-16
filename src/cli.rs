@@ -81,6 +81,7 @@ impl AuditInvocation {
             ("audit", Some("list")) => "audit_list",
             ("audit", _) => "audit",
             ("context", _) => "context",
+            ("web", _) => "web",
             _ => return None,
         };
         Some(Self {
@@ -99,6 +100,7 @@ pub enum Command {
     Status(StatusCommand),
     Audit(AuditCommand),
     Context(ContextCommand),
+    Web(WebCommand),
 }
 
 #[derive(clap::Args, Debug)]
@@ -363,6 +365,13 @@ pub struct AuditListCommand {
 
 #[derive(clap::Args, Debug)]
 pub struct ContextCommand {}
+
+#[derive(clap::Args, Debug)]
+pub struct WebCommand {
+    /// Port for the loopback-only web server. Use 0 to select an available port.
+    #[arg(long, default_value_t = 4242)]
+    pub port: u16,
+}
 
 fn parse_timestamp(value: &str) -> Result<chrono::DateTime<chrono::Utc>, String> {
     value
