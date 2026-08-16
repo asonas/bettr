@@ -1,6 +1,23 @@
-(() => {
-  "use strict";
+import { allIssues, applyStatusUpdate, kanbanColumns } from "./state.js";
 
+const statusLabels = {
+  todo: "Todo",
+  in_progress: "In progress",
+  blocked: "Blocked",
+  done: "Done",
+  cancelled: "Cancelled",
+};
+
+export function createWebController({
+  document: documentRef = globalThis.document,
+  window: windowRef = globalThis.window,
+  fetch: fetchRef = globalThis.fetch,
+  state: stateApi = { allIssues, applyStatusUpdate, kanbanColumns },
+} = {}) {
+  const document = documentRef;
+  const window = windowRef;
+  const fetch = fetchRef;
+  const location = window.location;
   const app = document.querySelector("#app");
   const banner = document.querySelector("#update-banner");
   const updateMessage = document.querySelector("#update-message");
@@ -11,15 +28,7 @@
   let statusPollInFlight = false;
   let projectNavInFlight = false;
   let projectNavSnapshot = "";
-  const webState = globalThis.BettrWebState;
-
-  const statusLabels = {
-    todo: "Todo",
-    in_progress: "In progress",
-    blocked: "Blocked",
-    done: "Done",
-    cancelled: "Cancelled",
-  };
+  let pollTimer;
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>'"]/g, (character) => ({
@@ -90,13 +99,13 @@
     }
     const focusedCard = document.activeElement?.matches(".kanban-card") ? issueKey({ project: document.activeElement.dataset.project, number: document.activeElement.dataset.number }) : "";
     const query = state.search.trim().toLowerCase();
-    const issues = webState.allIssues(state.status).filter((item) => {
+    const issues = stateApi.allIssues(state.status).filter((item) => {
       if (state.project && item.project !== state.project) return false;
       if (!query) return true;
       const issue = item.issue;
       return [item.project, issue.title, issue.body, issue.priority, issue.assignee_name].filter(Boolean).join(" ").toLowerCase().includes(query);
     });
-    board.innerHTML = webState.kanbanColumns.map(([key, title]) => {
+    board.innerHTML = stateApi.kanbanColumns.map(([key, title]) => {
       const columnIssues = issues.filter((item) => item.issue.state === key);
       return `<section class="kanban-column" data-state="${key}"><header class="kanban-column-header"><h2>${title}</h2><span>${columnIssues.length}</span></header><div class="kanban-cards">${columnIssues.length ? columnIssues.map(kanbanCard).join("") : `<div class="kanban-empty">No Issues</div>`}</div></section>`;
     }).join("");
@@ -122,9 +131,11 @@
 
   async function renderRecent() {
     breadcrumbs.innerHTML = "<span>Recent</span>";
-    const items = webState.allIssues(state.status).sort((a, b) => new Date(b.issue.updated_at) - new Date(a.issue.updated_at));
+    const focusedIssue = document.activeElement?.matches(".issue-row") ? issueKey({ project: document.activeElement.dataset.project, number: document.activeElement.dataset.number }) : "";
+    const items = stateApi.allIssues(state.status).sort((a, b) => new Date(b.issue.updated_at) - new Date(a.issue.updated_at));
     app.innerHTML = setPage("Recent", "Activity", "最近変化したIssueを時系列で確認します。") + issueList(items, "最近の更新はありません");
     bindIssueRows();
+    if (focusedIssue) [...document.querySelectorAll(".issue-row")].find((row) => issueKey({ project: row.dataset.project, number: row.dataset.number }) === focusedIssue)?.focus();
   }
 
   function activityBody(event) {
@@ -204,7 +215,8 @@
       setActiveProjectNav(state.project);
       if (focusedProject) [...document.querySelectorAll("[data-project-nav]")].find((link) => link.dataset.projectNav === focusedProject)?.focus();
     } catch (error) {
-      list.innerHTML = `<span class="project-nav-state">Projects unavailable</span>`;
+      projectNavSnapshot = "";
+      if (!list.querySelector("[data-project-nav]")) list.innerHTML = `<span class="project-nav-state">Projects unavailable</span>`;
     } finally {
       projectNavInFlight = false;
     }
@@ -230,7 +242,7 @@
       const response = await api("/api/status");
       syncLabel.textContent = `最終確認 ${formatDate(new Date().toISOString())}`;
       const firstPoll = !state.snapshot;
-      const update = webState.applyStatusUpdate(firstPoll ? null : state.status, response.data, state.updatedIssues);
+      const update = stateApi.applyStatusUpdate(firstPoll ? null : state.status, response.data, state.updatedIssues);
       const changed = update.changedKeys;
       state.status = response.data;
       state.snapshot = snapshot(response.data);
@@ -246,14 +258,29 @@
     }
   }
 
-  applyUpdate.addEventListener("click", () => {
-    banner.hidden = true;
-  });
-  document.querySelector("#search-nav").addEventListener("click", () => { location.hash = "#/projects"; setTimeout(() => document.querySelector("#issue-search")?.focus(), 0); });
-  document.querySelector("#theme-toggle").addEventListener("click", () => { const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = next; localStorage.setItem("bettr-theme", next); });
-  window.addEventListener("hashchange", route);
-  document.documentElement.dataset.theme = localStorage.getItem("bettr-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-  loadProjectNavigation();
-  pollStatus();
-  setInterval(pollStatus, 4000);
-})();
+  function start() {
+    applyUpdate.addEventListener("click", () => { banner.hidden = true; });
+    document.querySelector("#search-nav").addEventListener("click", () => { location.hash = "#/projects"; window.setTimeout(() => document.querySelector("#issue-search")?.focus(), 0); });
+    document.querySelector("#theme-toggle").addEventListener("click", () => { const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; window.localStorage.setItem("bettr-theme", next); document.documentElement.dataset.theme = next; });
+    window.addEventListener("hashchange", route);
+    document.documentElement.dataset.theme = window.localStorage.getItem("bettr-theme") || (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    loadProjectNavigation();
+    pollStatus();
+    pollTimer = window.setInterval(pollStatus, 4000);
+    return controller;
+  }
+
+  function stop() {
+    if (pollTimer) window.clearInterval(pollTimer);
+    window.removeEventListener("hashchange", route);
+  }
+
+  const controller = { state, start, stop, pollStatus, route, renderKanban, renderProjects, renderRecent, loadProjectNavigation };
+  return controller;
+}
+
+export function bootstrap(options) {
+  return createWebController(options).start();
+}
+
+if (typeof document !== "undefined" && document.documentElement.dataset.bettrAutostart === "true") bootstrap();
