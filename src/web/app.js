@@ -10,6 +10,8 @@
   const state = { status: null, snapshot: "", pending: null, pendingCount: 0, issueRows: [], focusIndex: -1 };
   let goPending = false;
   let goTimer;
+  let statusPollInFlight = false;
+  let statusPollEpoch = 0;
 
   const statusLabels = {
     todo: "Todo",
@@ -94,11 +96,11 @@
     const issue = response.data.issue;
     const history = response.data.history || [];
     const activity = history.map((event) => {
-      const body = event.event_type === "comment_added" ? event.metadata?.body : `${event.metadata?.from_state || ""} → ${event.metadata?.to_state || ""}`;
+      const body = activityBody(event);
       const label = event.event_type === "comment_added" ? "Comment" : (event.event_type || "Activity").replaceAll("_", " ");
       const actor = event.context?.agent || event.context?.operator || event.context?.kind || "system";
       const session = event.context?.session_id ? ` · ${event.context.session_id}` : "";
-      return `<article class="activity-item"><div class="activity-meta"><span class="activity-type">${escapeHtml(label)} · ${escapeHtml(actor)}${escapeHtml(session)}</span><time datetime="${escapeHtml(event.created_at)}">${formatDate(event.created_at)}</time></div><p class="activity-body">${escapeHtml(body || "変更が記録されました")}</p></article>`;
+      return `<article class="activity-item"><div class="activity-meta"><span class="activity-type">${escapeHtml(label)} · ${escapeHtml(actor)}${escapeHtml(session)}</span><time datetime="${escapeHtml(event.created_at)}">${formatDate(event.created_at)}</time></div><p class="activity-body">${escapeHtml(body || "Change recorded")}</p></article>`;
     }).join("");
     app.innerHTML = `<div class="detail-layout"><article><p class="eyebrow">${escapeHtml(project)} / Issue ${number}</p><p class="detail-key">${escapeHtml(issueKey({ project, number }))} · revision ${issue.revision}</p><h1 class="detail-title">${escapeHtml(issue.title)}</h1><div class="detail-body">${escapeHtml(issue.body || "")}</div><h2 class="activity-heading">Activity</h2><div class="activity-list">${activity || `<div class="empty-state"><strong>Activityはまだありません</strong><span>CLIでコメントや状態変更が行われると、ここに表示されます。</span></div>`}</div></article><aside class="property-rail" aria-label="Issue properties"><dl class="property-list"><div><dt>State</dt><dd><span class="state-pill ${escapeHtml(issue.state)}">${escapeHtml(statusLabels[issue.state] || issue.state)}</span></dd></div><div><dt>Priority</dt><dd>${escapeHtml(issue.priority || "未設定")}</dd></div><div><dt>Assignee</dt><dd>${escapeHtml(issue.assignee_name || "未割り当て")}</dd></div><div><dt>Created</dt><dd>${formatDate(issue.created_at)}</dd></div><div><dt>Updated</dt><dd>${formatDate(issue.updated_at)}</dd></div><div><dt>Context</dt><dd>revision ${issue.revision}</dd></div></dl></aside></div>`;
   }
@@ -108,6 +110,25 @@
     const items = [...(state.status?.recently_completed || []), ...(state.status?.active || [])].sort((a, b) => new Date(b.issue.updated_at) - new Date(a.issue.updated_at));
     app.innerHTML = setPage("Recent", "Activity", "最近変化したIssueを時系列で確認します。") + issueList(items, "最近の更新はありません");
     bindIssueRows();
+  }
+
+  function activityBody(event) {
+    const metadata = event.metadata || {};
+    switch (event.event_type) {
+      case "comment_added":
+        return metadata.body || "Comment added";
+      case "issue_created":
+        return "Issue created";
+      case "issue_updated": {
+        const changedFields = Object.keys(metadata.changes || {});
+        return changedFields.length ? `Changed: ${changedFields.join(", ")}` : "Issue updated";
+      }
+      default: {
+        const from = statusLabels[metadata.from_state] || metadata.from_state;
+        const to = statusLabels[metadata.to_state] || metadata.to_state;
+        return from && to ? `${from} → ${to}` : "Change recorded";
+      }
+    }
   }
 
   async function route() {
@@ -165,18 +186,33 @@
   }
 
   async function pollStatus() {
+    if (statusPollInFlight) return;
+    statusPollInFlight = true;
+    const pollEpoch = statusPollEpoch;
     try {
       const response = await api("/api/status");
+      if (pollEpoch !== statusPollEpoch) return;
       syncLabel.textContent = `最終確認 ${formatDate(new Date().toISOString())}`;
       if (!state.snapshot) { state.status = response.data; state.snapshot = snapshot(response.data); route(); return; }
       if (snapshot(response.data) !== state.snapshot) { state.pending = response.data; state.pendingCount = changedIssueCount(state.status, response.data); showUpdateBanner(); }
     } catch (error) {
       syncLabel.textContent = "更新を確認できません";
       document.querySelector("#connection-state").innerHTML = `<span class="connection-dot" style="background:var(--signal)" aria-hidden="true"></span><span>再接続待ち</span>`;
+    } finally {
+      statusPollInFlight = false;
     }
   }
 
-  applyUpdate.addEventListener("click", () => { if (!state.pending) return; state.status = state.pending; state.snapshot = snapshot(state.pending); state.pending = null; state.pendingCount = 0; banner.hidden = true; route(); });
+  applyUpdate.addEventListener("click", () => {
+    if (!state.pending) return;
+    statusPollEpoch += 1;
+    state.status = state.pending;
+    state.snapshot = snapshot(state.pending);
+    state.pending = null;
+    state.pendingCount = 0;
+    banner.hidden = true;
+    route();
+  });
   document.querySelector("#search-nav").addEventListener("click", () => { location.hash = "#/projects"; setTimeout(() => document.querySelector("#issue-search")?.focus(), 0); });
   document.querySelector("#theme-toggle").addEventListener("click", () => { const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = next; localStorage.setItem("bettr-theme", next); });
   document.addEventListener("keydown", (event) => {

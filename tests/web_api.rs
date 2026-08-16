@@ -154,6 +154,34 @@ fn web_serves_status_and_embedded_assets() {
 }
 
 #[test]
+fn web_status_polling_does_not_reopen_an_acknowledged_update() {
+    let app_js = include_str!("../src/web/app.js");
+
+    assert!(app_js.contains("let statusPollInFlight = false;"));
+    assert!(app_js.contains("let statusPollEpoch = 0;"));
+    assert!(app_js.contains("if (statusPollInFlight) return;"));
+    assert!(app_js.contains("const pollEpoch = statusPollEpoch;"));
+    assert!(app_js.contains("if (pollEpoch !== statusPollEpoch) return;"));
+}
+
+#[test]
+fn web_activity_does_not_render_an_empty_state_transition() {
+    let app_js = include_str!("../src/web/app.js");
+
+    assert!(app_js.contains("case \"issue_created\":"));
+    assert!(app_js.contains("Issue created"));
+    assert!(app_js.contains("Change recorded"));
+}
+
+#[test]
+fn web_page_headings_use_readable_tracking() {
+    let app_css = include_str!("../src/web/app.css");
+
+    assert!(app_css.contains("font-weight: 720; letter-spacing: -.02em; line-height: 1.1;"));
+    assert!(!app_css.contains("letter-spacing: -.045em"));
+}
+
+#[test]
 fn web_serves_project_issue_detail_with_activity() {
     let app = initialize_app();
     let server = WebProcess::start(&app);
