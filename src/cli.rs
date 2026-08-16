@@ -14,6 +14,83 @@ pub struct Cli {
     pub command: Command,
 }
 
+pub struct AuditInvocation {
+    pub operation: &'static str,
+    pub database: Option<std::path::PathBuf>,
+    pub project: Option<String>,
+}
+
+impl AuditInvocation {
+    pub fn from_arguments(arguments: &[std::ffi::OsString]) -> Option<Self> {
+        let mut database = None;
+        let mut project = None;
+        let mut positionals = Vec::new();
+        let mut index = 1;
+        while index < arguments.len() {
+            let Some(argument) = arguments[index].to_str() else {
+                index += 1;
+                continue;
+            };
+            match argument {
+                "--database" => {
+                    index += 1;
+                    database = arguments.get(index).map(std::path::PathBuf::from);
+                }
+                "--project" => {
+                    index += 1;
+                    project = arguments
+                        .get(index)
+                        .and_then(|value| value.to_str())
+                        .map(str::to_owned);
+                }
+                _ if argument.starts_with("--database=") => {
+                    database = argument
+                        .strip_prefix("--database=")
+                        .map(std::path::PathBuf::from);
+                }
+                _ if argument.starts_with("--project=") => {
+                    project = argument.strip_prefix("--project=").map(str::to_owned);
+                }
+                _ if argument.starts_with('-') => {}
+                _ => positionals.push(argument),
+            }
+            index += 1;
+        }
+
+        let root = positionals.first().copied()?;
+        let subcommand = positionals.get(1).copied();
+        let operation = match (root, subcommand) {
+            ("init", _) => "init",
+            ("project", Some("create")) => "project_create",
+            ("project", Some("list")) => "project_list",
+            ("project", _) => "project",
+            ("issue", Some("create")) => "issue_create",
+            ("issue", Some("show")) => "issue_show",
+            ("issue", Some("list")) => "issue_list",
+            ("issue", Some("edit")) => "issue_edit",
+            ("issue", Some("comment")) => "issue_comment",
+            ("issue", Some("history")) => "issue_history",
+            ("issue", Some("start")) => "issue_start",
+            ("issue", Some("block")) => "issue_block",
+            ("issue", Some("resume")) => "issue_resume",
+            ("issue", Some("complete")) => "issue_complete",
+            ("issue", Some("cancel")) => "issue_cancel",
+            ("issue", Some("reopen")) => "issue_reopen",
+            ("issue", _) => "issue",
+            ("status", _) => "status",
+            ("audit", Some("list")) => "audit_list",
+            ("audit", _) => "audit",
+            ("context", _) => "context",
+            _ => return None,
+        };
+        Some(Self {
+            operation,
+            database,
+            project,
+        })
+    }
+}
+
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     Init(InitCommand),

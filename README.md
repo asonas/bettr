@@ -29,7 +29,7 @@ Create a project and an Issue:
 
 ```sh
 bettr project create bettr
-bettr issue create --project bettr --title "Document Phase 1" --priority high
+bettr issue create --project bettr --title "Document Phase 1" --priority critical
 ```
 
 The new Issue is `bettr#1` at revision 1. Assignment is an optimistic, revision-guarded edit; every successful edit or state transition returns the next revision:
@@ -82,7 +82,7 @@ BETTR_OPERATOR=reviewer bettr issue resume 1 --project bettr --revision 4
 
 ## Phase 1 scope
 
-Phase 1 provides projects, five Issue states (`todo`, `in_progress`, `blocked`, `done`, and `cancelled`), immutable comments, revision-guarded edits, history, cross-project status, execution context, and SQLite audit events.
+Phase 1 provides projects, priorities (`critical`, `high`, `medium`, and `low`), five Issue states (`todo`, `in_progress`, `blocked`, `done`, and `cancelled`), immutable comments, revision-guarded edits, history, cross-project status, execution context, and SQLite audit events.
 
 The Phase 1 CLI does not start agents, share data over a network, or support external databases. It also does not yet provide claim or lease coordination, decision requests, dependencies, parent-child Issues, structured references, event cursors, idempotency keys, JSONL audit export, backup and restore, redaction, or `doctor` diagnostics.
 
@@ -94,7 +94,7 @@ Run the release-mode child-process latency baseline with:
 cargo bench --bench cli_latency
 ```
 
-The harness reports p50 and p95 for 1,000 `issue show` operations and 1,000 revision-guarded `issue edit` operations against one prepared database. It reports measurements without enforcing the 50 ms target in the normal test suite. Record machine information and results in release notes before publishing a performance claim.
+The harness reports p50 and p95 for 1,000 `issue show` operations, 1,000 revision-guarded `issue edit` operations, and 50 selective `issue list` operations over 100,000 Issues. The large fixture starts from the CLI-initialized production schema and identity, then uses a deterministic bulk transaction for practical setup time. It reports measurements without enforcing the 50 ms or 200 ms targets in the normal test suite. Record machine information and results in release notes before publishing a performance claim.
 
 ## License
 

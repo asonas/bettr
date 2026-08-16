@@ -246,6 +246,15 @@ impl Transition {
         }
     }
 
+    pub const fn changed_fields(&self) -> &'static [&'static str] {
+        match self {
+            Self::Start | Self::Resume => &["state"],
+            Self::Block(_) => &["state", "reason", "wait_kind"],
+            Self::Complete(_) => &["state", "summary", "verification"],
+            Self::Cancel(_) | Self::Reopen(_) => &["state", "reason"],
+        }
+    }
+
     pub fn event_metadata(
         &self,
         from_state: IssueState,
@@ -318,7 +327,7 @@ pub enum Priority {
     Low,
     Medium,
     High,
-    Urgent,
+    Critical,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Serialize)]
@@ -354,7 +363,7 @@ impl Priority {
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
-            Self::Urgent => "urgent",
+            Self::Critical => "critical",
         }
     }
 
@@ -363,7 +372,7 @@ impl Priority {
             "low" => Ok(Self::Low),
             "medium" => Ok(Self::Medium),
             "high" => Ok(Self::High),
-            "urgent" => Ok(Self::Urgent),
+            "critical" => Ok(Self::Critical),
             _ => Err(crate::error::AppError::Internal(format!(
                 "invalid issue priority in database: {value}"
             ))),
@@ -425,6 +434,18 @@ impl NewIssue {
     pub fn validate(&self) -> Result<(), crate::error::AppError> {
         validate_issue_title(&self.title)?;
         validate_issue_body(self.body.as_deref())
+    }
+
+    pub fn changed_fields(&self) -> Vec<&'static str> {
+        let mut fields = vec!["title"];
+        if self.body.is_some() {
+            fields.push("body");
+        }
+        fields.push("state");
+        if self.priority.is_some() {
+            fields.push("priority");
+        }
+        fields
     }
 }
 
@@ -498,6 +519,26 @@ impl IssuePatch {
         if let Some(assignee_name) = &self.assignee_name {
             issue.assignee_name.clone_from(assignee_name);
         }
+    }
+
+    pub fn changed_fields(&self, before: &Issue, after: &Issue) -> Vec<&'static str> {
+        let mut fields = Vec::new();
+        if self.title.is_some() && before.title != after.title {
+            fields.push("title");
+        }
+        if self.body.is_some() && before.body != after.body {
+            fields.push("body");
+        }
+        if self.priority.is_some() && before.priority != after.priority {
+            fields.push("priority");
+        }
+        if self.assignee_kind.is_some() && before.assignee_kind != after.assignee_kind {
+            fields.push("assignee_kind");
+        }
+        if self.assignee_name.is_some() && before.assignee_name != after.assignee_name {
+            fields.push("assignee_name");
+        }
+        fields
     }
 
     pub fn event_metadata(&self, revision: i64) -> serde_json::Value {

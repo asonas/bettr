@@ -210,6 +210,31 @@ fn output_json(bytes: &[u8]) -> serde_json::Value {
     serde_json::from_slice(bytes).unwrap()
 }
 
+fn initialized_issue() -> crate::support::TestApp {
+    let app = initialized_project();
+    app.command()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "bettr",
+            "--title",
+            "Snapshot target",
+        ])
+        .assert()
+        .success();
+    app
+}
+
+fn context() -> crate::domain::ExecutionContext {
+    crate::domain::ExecutionContext {
+        kind: crate::domain::InitiatorKind::Human,
+        agent: None,
+        session_id: None,
+        operator: Some("snapshot-tester".to_owned()),
+    }
+}
+
 #[test]
 fn hold_immediate_writer_for_parent_process() {
     let Some(database) = std::env::var_os(LOCK_HELPER_DATABASE) else {
@@ -376,6 +401,175 @@ fn production_database_reads_continue_while_an_immediate_writer_is_open() {
     assert_eq!(projects[0].name, "bettr");
 
     writer.release();
+}
+
+#[test]
+fn production_database_connections_enable_integrity_and_contention_pragmas() {
+    let app = initialized_project();
+    let database = crate::store::Database::open(&app.database).unwrap();
+    let connection = database.connection();
+
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "foreign_keys", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+            .unwrap(),
+        "wal"
+    );
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "busy_timeout", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        5_000
+    );
+}
+
+#[test]
+fn comment_lookup_and_audit_revision_share_the_immediate_transaction_snapshot() {
+    let app = initialized_issue();
+    let database = crate::store::Database::open(&app.database).unwrap();
+    let (reached_tx, reached_rx) = std::sync::mpsc::sync_channel(0);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
+    let mut paused = false;
+    database
+        .connection()
+        .authorizer(Some(
+            move |authorization: rusqlite::hooks::AuthContext<'_>| {
+                if !paused
+                    && matches!(
+                        authorization.action,
+                        rusqlite::hooks::AuthAction::Transaction {
+                            operation: rusqlite::hooks::TransactionOperation::Begin
+                        }
+                    )
+                {
+                    paused = true;
+                    reached_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                }
+                rusqlite::hooks::Authorization::Allow
+            },
+        ))
+        .unwrap();
+    let mut app_under_test = crate::app::App::new(database);
+    let operation = std::thread::spawn(move || {
+        app_under_test.add_comment("bettr", 1, "Concurrent comment", &context())
+    });
+
+    reached_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap();
+    let writer = rusqlite::Connection::open(&app.database).unwrap();
+    writer
+        .execute("UPDATE issues SET revision = 2 WHERE number = 1", [])
+        .unwrap();
+    release_tx.send(()).unwrap();
+    operation.join().unwrap().unwrap();
+
+    let audit_revision = writer
+        .query_row(
+            "SELECT revision FROM audit_events\n\
+             WHERE operation = 'issue_comment' AND success = 1\n\
+             ORDER BY rowid DESC LIMIT 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap();
+    assert_eq!(audit_revision, 2);
+}
+
+#[test]
+fn history_events_and_audit_revision_share_one_read_snapshot() {
+    let app = initialized_issue();
+    let database = crate::store::Database::open(&app.database).unwrap();
+    let (reached_tx, reached_rx) = std::sync::mpsc::sync_channel(0);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
+    let mut paused = false;
+    database
+        .connection()
+        .authorizer(Some(
+            move |authorization: rusqlite::hooks::AuthContext<'_>| {
+                if !paused
+                    && matches!(
+                        authorization.action,
+                        rusqlite::hooks::AuthAction::Read {
+                            table_name: "domain_events",
+                            ..
+                        }
+                    )
+                {
+                    paused = true;
+                    reached_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                }
+                rusqlite::hooks::Authorization::Allow
+            },
+        ))
+        .unwrap();
+    let mut app_under_test = crate::app::App::new(database);
+    let operation = std::thread::spawn(move || app_under_test.issue_history("bettr", 1));
+
+    reached_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap();
+    let writer = rusqlite::Connection::open(&app.database).unwrap();
+    let (project_id, issue_id): (String, String) = writer
+        .query_row(
+            "SELECT project_id, id FROM issues WHERE number = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let metadata = serde_json::json!({
+        "changes": { "title": "Concurrent title" },
+        "revision": 2,
+        "context": context(),
+    })
+    .to_string();
+    let transaction = writer.unchecked_transaction().unwrap();
+    transaction
+        .execute(
+            "UPDATE issues SET title = 'Concurrent title', revision = 2 WHERE id = ?1",
+            [&issue_id],
+        )
+        .unwrap();
+    transaction
+        .execute(
+            "INSERT INTO domain_events (\n\
+                 id, sequence, project_id, issue_id, event_type, metadata_json, created_at\n\
+             ) VALUES (\n\
+                 ?1, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM domain_events),\n\
+                 ?2, ?3, 'issue_updated', ?4, ?5\n\
+             )",
+            rusqlite::params![
+                uuid::Uuid::new_v4().to_string(),
+                project_id,
+                issue_id,
+                metadata,
+                chrono::Utc::now().to_rfc3339(),
+            ],
+        )
+        .unwrap();
+    transaction.commit().unwrap();
+    release_tx.send(()).unwrap();
+    let history = operation.join().unwrap().unwrap();
+
+    let max_history_revision = history.iter().filter_map(|event| event.revision).max();
+    let audit_revision = writer
+        .query_row(
+            "SELECT revision FROM audit_events\n\
+             WHERE operation = 'issue_history' AND success = 1\n\
+             ORDER BY rowid DESC LIMIT 1",
+            [],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .unwrap();
+    assert_eq!(audit_revision, max_history_revision);
 }
 
 #[test]

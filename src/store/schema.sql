@@ -12,7 +12,9 @@ CREATE TABLE issues (
     title TEXT NOT NULL,
     body TEXT,
     state TEXT NOT NULL CHECK (state IN ('todo', 'in_progress', 'blocked', 'done', 'cancelled')),
-    priority TEXT,
+    priority TEXT CHECK (
+        priority IS NULL OR priority IN ('critical', 'high', 'medium', 'low')
+    ),
     assignee_kind TEXT,
     assignee_name TEXT,
     revision INTEGER NOT NULL,
@@ -67,6 +69,7 @@ CREATE TABLE audit_events (
     target_type TEXT,
     target_id TEXT,
     revision INTEGER,
+    changed_fields_json TEXT NOT NULL DEFAULT '[]',
     metadata_json TEXT NOT NULL DEFAULT '{}'
 );
 

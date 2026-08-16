@@ -50,6 +50,23 @@ fn issue_snapshot(app: &crate::support::TestApp) -> (String, i64, String, Option
         .unwrap()
 }
 
+fn full_issue_snapshot(app: &crate::support::TestApp) -> Vec<rusqlite::types::Value> {
+    rusqlite::Connection::open(&app.database)
+        .unwrap()
+        .query_row(
+            "SELECT id, project_id, number, title, body, state, priority, assignee_kind,
+                    assignee_name, revision, created_at, updated_at
+             FROM issues WHERE number = 1",
+            [],
+            |row| {
+                (0..row.as_ref().column_count())
+                    .map(|index| row.get::<_, rusqlite::types::Value>(index))
+                    .collect()
+            },
+        )
+        .unwrap()
+}
+
 fn domain_event_count(app: &crate::support::TestApp) -> i64 {
     rusqlite::Connection::open(&app.database)
         .unwrap()
@@ -379,7 +396,7 @@ fn stale_revision_reports_the_current_revision_without_changing_issue_data() {
         .output()
         .unwrap();
     assert!(first.status.success());
-    let after_first = issue_snapshot(&app);
+    let after_first = full_issue_snapshot(&app);
 
     let stale = app
         .command()
@@ -400,7 +417,7 @@ fn stale_revision_reports_the_current_revision_without_changing_issue_data() {
     let response: serde_json::Value = serde_json::from_slice(&stale.stderr).unwrap();
     assert_eq!(response["error"]["code"], "revision_conflict");
     assert_eq!(response["error"]["details"]["current_revision"], 2);
-    assert_eq!(issue_snapshot(&app), after_first);
+    assert_eq!(full_issue_snapshot(&app), after_first);
 }
 
 #[test]

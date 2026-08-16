@@ -46,12 +46,13 @@ fn phase_one_workflow_preserves_revisions_states_events_and_context() {
             "--title",
             "Verify the Phase 1 workflow",
             "--priority",
-            "high",
+            "critical",
         ],
         &[("BETTR_OPERATOR", "issue-author")],
     );
     assert_eq!(created["number"], 1);
     assert_eq!(created["state"], "todo");
+    assert_eq!(created["priority"], "critical");
     assert_eq!(created["revision"], 1);
 
     let assigned = run_json(

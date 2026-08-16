@@ -120,6 +120,36 @@ fn issue_create_allocates_numbers_per_project() {
 }
 
 #[test]
+fn issue_create_human_output_escapes_project_and_title_controls() {
+    let app = crate::support::TestApp::new();
+    app.command().arg("init").assert().success();
+    let project = "project\u{1b}[31m";
+    app.command()
+        .args(["project", "create", project])
+        .assert()
+        .success();
+
+    let output = app
+        .command()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            project,
+            "--title",
+            "title\u{1b}[2J",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains('\u{1b}'));
+    assert!(stdout.contains(r"project\u{1b}[31m#1"));
+    assert!(stdout.contains(r"title\u{1b}[2J"));
+}
+
+#[test]
 fn issue_create_rolls_back_the_issue_and_domain_event_when_success_audit_cannot_be_written() {
     let app = crate::support::TestApp::new();
     app.command().arg("init").assert().success();

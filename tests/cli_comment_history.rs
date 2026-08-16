@@ -188,7 +188,7 @@ fn issue_history_projects_domain_events_in_sequence_without_audit_reads() {
             "--revision",
             "1",
             "--priority",
-            "urgent",
+            "critical",
         ])
         .assert()
         .success();
@@ -275,7 +275,7 @@ fn issue_history_projects_domain_events_in_sequence_without_audit_reads() {
     assert_eq!(events[1]["context"]["session_id"], "edit-session");
     assert_eq!(events[2]["context"]["operator"], "commenter");
     assert_eq!(events[3]["context"]["operator"], "starter");
-    assert_eq!(events[1]["metadata"]["changes"]["priority"], "urgent");
+    assert_eq!(events[1]["metadata"]["changes"]["priority"], "critical");
     assert_eq!(events[2]["metadata"]["body"], "Ready to start");
 
     let serialized = serde_json::to_string(events).unwrap();
@@ -323,6 +323,25 @@ fn issue_history_read_failures_are_audited() {
         )
         .unwrap();
     assert_eq!(audit, (0, 10, Some(issue_id), Some(1)));
+}
+
+#[test]
+fn issue_history_human_timestamps_use_the_local_timezone() {
+    let app = initialized_issue();
+
+    let output = app
+        .command()
+        .env("TZ", "Asia/Tokyo")
+        .args(["issue", "history", "1", "--project", "bettr"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("+09:00"),
+        "unexpected history output: {stdout}"
+    );
 }
 
 #[test]

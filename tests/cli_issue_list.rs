@@ -90,7 +90,7 @@ fn issue_list_requires_a_project_by_default_and_excludes_completed_issues() {
     let todo = create_issue(&app, "alpha", "Alpha todo", None, Some("low"));
     let done = create_issue(&app, "alpha", "Alpha done", None, Some("high"));
     let cancelled = create_issue(&app, "alpha", "Alpha cancelled", None, None);
-    create_issue(&app, "beta", "Beta todo", None, Some("urgent"));
+    create_issue(&app, "beta", "Beta todo", None, Some("critical"));
     set_issue_fields(
         &app,
         &todo,
@@ -154,6 +154,7 @@ fn issue_list_requires_a_project_by_default_and_excludes_completed_issues() {
     assert_eq!(
         audits,
         [
+            (0, r#"{"error_code":"invalid_input"}"#.to_owned()),
             (1, "{}".to_owned()),
             (0, r#"{"error_code":"not_found"}"#.to_owned())
         ]
@@ -186,7 +187,7 @@ fn issue_list_filters_across_projects_and_includes_completed_on_request() {
         "alpha",
         "Progress work",
         Some("needle in body"),
-        Some("urgent"),
+        Some("critical"),
     );
     let alpha_done = create_issue(&app, "alpha", "Done work", None, Some("medium"));
     let beta_todo = create_issue(&app, "beta", "Needle in title", None, Some("high"));
@@ -295,7 +296,7 @@ fn issue_list_filters_across_projects_and_includes_completed_on_request() {
             "--priority",
             "high",
             "--priority",
-            "urgent",
+            "critical",
             "--json",
         ])
         .output()
@@ -379,8 +380,8 @@ fn issue_list_orders_state_rank_before_priority() {
     app.command().arg("init").assert().success();
     create_project(&app, "alpha");
 
-    let todo = create_issue(&app, "alpha", "Todo urgent", None, Some("urgent"));
-    let progress = create_issue(&app, "alpha", "Progress urgent", None, Some("urgent"));
+    let todo = create_issue(&app, "alpha", "Todo critical", None, Some("critical"));
+    let progress = create_issue(&app, "alpha", "Progress critical", None, Some("critical"));
     let blocked = create_issue(&app, "alpha", "Blocked low", None, Some("low"));
     set_issue_fields(
         &app,
@@ -414,7 +415,7 @@ fn issue_list_orders_state_rank_before_priority() {
         .unwrap();
     assert_eq!(
         titles(&json_data(&output)),
-        ["Blocked low", "Progress urgent", "Todo urgent"]
+        ["Blocked low", "Progress critical", "Todo critical"]
     );
 }
 
@@ -425,7 +426,7 @@ fn issue_list_orders_priority_before_creation_time() {
     create_project(&app, "alpha");
 
     let low = create_issue(&app, "alpha", "Older low", None, Some("low"));
-    let urgent = create_issue(&app, "alpha", "Newer urgent", None, Some("urgent"));
+    let critical = create_issue(&app, "alpha", "Newer critical", None, Some("critical"));
     set_issue_fields(
         &app,
         &low,
@@ -436,7 +437,7 @@ fn issue_list_orders_priority_before_creation_time() {
     );
     set_issue_fields(
         &app,
-        &urgent,
+        &critical,
         "todo",
         None,
         "2026-08-10T00:00:00Z",
@@ -448,7 +449,7 @@ fn issue_list_orders_priority_before_creation_time() {
         .args(["issue", "list", "--all-projects", "--json"])
         .output()
         .unwrap();
-    assert_eq!(titles(&json_data(&output)), ["Newer urgent", "Older low"]);
+    assert_eq!(titles(&json_data(&output)), ["Newer critical", "Older low"]);
 }
 
 #[test]

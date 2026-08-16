@@ -1,3 +1,5 @@
+mod support;
+
 fn context_command(home: &std::path::Path) -> assert_cmd::Command {
     let mut command = assert_cmd::Command::cargo_bin("bettr").unwrap();
     command
@@ -210,4 +212,31 @@ fn invalid_or_ambiguous_configuration_exits_two() {
         let response: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
         assert_eq!(response["error"]["code"], "invalid_input");
     }
+}
+
+#[test]
+fn shared_test_commands_isolate_home_xdg_and_current_directory() {
+    let app = crate::support::TestApp::new();
+    let command = app.command();
+    let environment = command
+        .get_envs()
+        .filter_map(|(name, value)| value.map(|value| (name.to_owned(), value.to_owned())))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    assert_eq!(
+        command.get_current_dir(),
+        Some(app.dir.path().join("work").as_path())
+    );
+    assert_eq!(
+        environment.get(std::ffi::OsStr::new("HOME")),
+        Some(&app.dir.path().join("home").into_os_string())
+    );
+    assert_eq!(
+        environment.get(std::ffi::OsStr::new("XDG_CONFIG_HOME")),
+        Some(&app.dir.path().join("config").into_os_string())
+    );
+    assert_eq!(
+        environment.get(std::ffi::OsStr::new("XDG_DATA_HOME")),
+        Some(&app.dir.path().join("data").into_os_string())
+    );
 }

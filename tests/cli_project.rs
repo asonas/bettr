@@ -135,6 +135,29 @@ fn project_list_is_ordered_by_name() {
 }
 
 #[test]
+fn project_human_output_escapes_terminal_controls() {
+    let app = crate::support::TestApp::new();
+    app.command().arg("init").assert().success();
+    let project_name = "project\u{1b}[31m";
+
+    let created = app
+        .command()
+        .args(["project", "create", project_name])
+        .output()
+        .unwrap();
+    assert!(created.status.success());
+    let created = String::from_utf8(created.stdout).unwrap();
+    assert!(!created.contains('\u{1b}'));
+    assert!(created.contains(r"project\u{1b}[31m"));
+
+    let listed = app.command().args(["project", "list"]).output().unwrap();
+    assert!(listed.status.success());
+    let listed = String::from_utf8(listed.stdout).unwrap();
+    assert!(!listed.contains('\u{1b}'));
+    assert!(listed.contains(r"project\u{1b}[31m"));
+}
+
+#[test]
 fn agent_execution_context_is_written_to_project_audit_without_raw_argv() {
     let app = crate::support::TestApp::new();
     app.command().arg("init").assert().success();

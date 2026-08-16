@@ -90,7 +90,7 @@ fn issue_edit_changes_fields_preserves_omissions_and_supports_explicit_clearing(
             "--body",
             "Complete the local workflow",
             "--priority",
-            "urgent",
+            "critical",
             "--assignee-kind",
             "human",
             "--assignee-name",
@@ -103,7 +103,7 @@ fn issue_edit_changes_fields_preserves_omissions_and_supports_explicit_clearing(
     let changed: serde_json::Value = serde_json::from_slice(&changed.stdout).unwrap();
     assert_eq!(changed["data"]["title"], "Build editing and history");
     assert_eq!(changed["data"]["body"], "Complete the local workflow");
-    assert_eq!(changed["data"]["priority"], "urgent");
+    assert_eq!(changed["data"]["priority"], "critical");
     assert_eq!(changed["data"]["assignee_kind"], "human");
     assert_eq!(changed["data"]["assignee_name"], "asonas");
     assert_eq!(changed["data"]["revision"], 3);

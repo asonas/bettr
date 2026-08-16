@@ -130,6 +130,77 @@ fn init_does_not_modify_a_non_bettr_database_with_similar_table_names() {
 }
 
 #[test]
+fn project_list_does_not_modify_a_non_bettr_database() {
+    let app = crate::support::TestApp::new();
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE projects (sentinel TEXT);\n\
+             INSERT INTO projects VALUES ('keep-me');\n\
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    let journal_mode = connection
+        .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+        .unwrap();
+    let schema = connection
+        .prepare("SELECT name, sql FROM sqlite_schema ORDER BY name")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let data = connection
+        .query_row("SELECT sentinel FROM projects", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .unwrap();
+    drop(connection);
+    let bytes = std::fs::read(&app.database).unwrap();
+
+    app.command()
+        .args(["project", "list", "--json"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("database_not_initialized"));
+
+    assert_eq!(std::fs::read(&app.database).unwrap(), bytes);
+    assert!(!app.database.with_extension("db-wal").exists());
+    assert!(!app.database.with_extension("db-shm").exists());
+    let connection = rusqlite::Connection::open_with_flags(
+        &app.database,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+            .unwrap(),
+        journal_mode
+    );
+    let after_schema = connection
+        .prepare("SELECT name, sql FROM sqlite_schema ORDER BY name")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(after_schema, schema);
+    assert_eq!(
+        connection
+            .query_row("SELECT sentinel FROM projects", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap(),
+        data
+    );
+}
+
+#[test]
 fn project_list_requires_an_initialized_database() {
     let app = crate::support::TestApp::new();
 
@@ -138,4 +209,31 @@ fn project_list_requires_an_initialized_database() {
         .assert()
         .code(3)
         .stderr(predicate::str::contains("database_not_initialized"));
+}
+
+#[cfg(unix)]
+#[test]
+fn init_creates_the_direct_database_parent_with_owner_only_permissions() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("private/bettr.db");
+    let mut command = assert_cmd::Command::cargo_bin("bettr").unwrap();
+    command
+        .env_clear()
+        .env("HOME", directory.path().join("home"))
+        .env("XDG_CONFIG_HOME", directory.path().join("config"))
+        .env("XDG_DATA_HOME", directory.path().join("data"))
+        .arg("--database")
+        .arg(&database)
+        .arg("init")
+        .assert()
+        .success();
+
+    let mode = std::fs::metadata(database.parent().unwrap())
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o700);
 }

@@ -24,7 +24,7 @@ Successful commands exit with code 0 and return:
     "title": "Verify the Phase 1 workflow",
     "body": null,
     "state": "todo",
-    "priority": "high",
+    "priority": "critical",
     "assignee_kind": null,
     "assignee_name": null,
     "revision": 1,
@@ -58,6 +58,12 @@ Failed commands return a nonzero exit code and write:
 ## Timestamps
 
 All JSON timestamps are RFC 3339 strings in UTC. bettr serializes UTC with the `Z` suffix, for example `2026-08-15T09:30:00Z`. Consumers must parse the timestamp as an instant rather than relying on a fixed number of fractional-second digits.
+
+Human history and audit output renders the same instants in the machine's local timezone. This presentation conversion does not change database or JSON timestamps.
+
+## Audit changed fields
+
+Each `audit list --json` event includes `changed_fields`, an ordered array of allowlisted field names. It never contains field values. Read operations and failed operations return an empty array. For example, an Issue edit that changes a title and priority returns `"changed_fields":["title","priority"]`; transition events name `state` and the applicable metadata fields without exposing reasons, summaries, verification text, Issue bodies, or comment bodies.
 
 ## Issue references
 

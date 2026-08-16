@@ -372,6 +372,25 @@ fn audit_human_output_is_concise_and_escaped() {
 }
 
 #[test]
+fn audit_human_timestamps_use_the_local_timezone() {
+    let (app, _project, _issue) = initialized_issue();
+
+    let output = app
+        .command()
+        .env("TZ", "Asia/Tokyo")
+        .args(["audit", "list", "--operation", "issue_create"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("+09:00"),
+        "unexpected audit output: {stdout}"
+    );
+}
+
+#[test]
 fn malformed_audit_filter_that_reaches_the_app_is_audited() {
     let (app, _project, _issue) = initialized_issue();
 
@@ -391,4 +410,225 @@ fn malformed_audit_filter_that_reaches_the_app_is_audited() {
         .unwrap();
     assert_eq!(success, 0);
     assert_eq!(exit_code, 2);
+}
+
+#[test]
+fn cli_validation_failures_with_a_valid_database_and_context_are_audited() {
+    let (app, _project, _issue) = initialized_issue();
+    let cases = [
+        (vec!["issue", "show", "1", "--json"], "issue_show"),
+        (
+            vec![
+                "issue",
+                "list",
+                "--project",
+                "bettr",
+                "--all-projects",
+                "--json",
+            ],
+            "issue_list",
+        ),
+        (
+            vec![
+                "issue",
+                "edit",
+                "1",
+                "--project",
+                "bettr",
+                "--revision",
+                "1",
+                "--body",
+                "replacement",
+                "--clear-body",
+                "--json",
+            ],
+            "issue_edit",
+        ),
+    ];
+
+    for (arguments, _) in &cases {
+        app.command()
+            .env("BETTR_OPERATOR", "validation-auditor")
+            .args(arguments)
+            .assert()
+            .code(2);
+    }
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    for (_, operation) in cases {
+        let (count, initiator): (i64, String) = connection
+            .query_row(
+                "SELECT COUNT(*), MIN(initiator_name) FROM audit_events\n\
+                 WHERE operation = ?1 AND success = 0 AND exit_code = 2",
+                [operation],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "missing failure audit for {operation}");
+        assert_eq!(initiator, "validation-auditor");
+    }
+}
+
+#[test]
+fn project_scoped_issue_list_audit_keeps_the_project_identity() {
+    let (app, project, _issue) = initialized_issue();
+
+    app.command()
+        .args(["issue", "list", "--project", "bettr", "--json"])
+        .assert()
+        .success();
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    let audit: (Option<String>, Option<String>) = connection
+        .query_row(
+            "SELECT project_id, project_name FROM audit_events\n\
+             WHERE operation = 'issue_list' AND success = 1\n\
+             ORDER BY rowid DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(audit.0.as_deref(), project["id"].as_str());
+    assert_eq!(audit.1.as_deref(), Some("bettr"));
+}
+
+#[test]
+fn audit_changed_fields_are_value_free_and_operation_specific() {
+    let (app, _project, _issue) = initialized_issue();
+    app.command()
+        .args([
+            "issue",
+            "edit",
+            "1",
+            "--project",
+            "bettr",
+            "--revision",
+            "1",
+            "--title",
+            "another secret title",
+            "--priority",
+            "critical",
+        ])
+        .assert()
+        .success();
+    app.command()
+        .args([
+            "issue",
+            "start",
+            "1",
+            "--project",
+            "bettr",
+            "--revision",
+            "2",
+        ])
+        .assert()
+        .success();
+    app.command()
+        .args([
+            "issue",
+            "block",
+            "1",
+            "--project",
+            "bettr",
+            "--revision",
+            "3",
+            "--reason",
+            "secret wait reason",
+            "--wait-kind",
+            "external",
+        ])
+        .assert()
+        .success();
+    app.command()
+        .args([
+            "issue",
+            "comment",
+            "1",
+            "--project",
+            "bettr",
+            "--body",
+            "secret comment body",
+        ])
+        .assert()
+        .success();
+
+    let events = json_data(
+        app.command()
+            .args(["audit", "list", "--json"])
+            .output()
+            .unwrap(),
+    );
+    let events = events.as_array().unwrap();
+    let fields_for = |operation: &str| {
+        events
+            .iter()
+            .find(|event| event["operation"] == operation)
+            .unwrap()["changed_fields"]
+            .clone()
+    };
+    assert_eq!(fields_for("project_create"), serde_json::json!(["name"]));
+    assert_eq!(
+        fields_for("issue_create"),
+        serde_json::json!(["title", "body", "state"])
+    );
+    assert_eq!(
+        fields_for("issue_edit"),
+        serde_json::json!(["title", "priority"])
+    );
+    assert_eq!(fields_for("issue_start"), serde_json::json!(["state"]));
+    assert_eq!(
+        fields_for("issue_block"),
+        serde_json::json!(["state", "reason", "wait_kind"])
+    );
+    assert_eq!(
+        fields_for("issue_comment"),
+        serde_json::json!(["comment", "updated_at"])
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event["changed_fields"].is_array())
+    );
+
+    let serialized = serde_json::to_string(events).unwrap();
+    for forbidden in [
+        "secret title",
+        "secret body",
+        "another secret title",
+        "secret wait reason",
+        "secret comment body",
+    ] {
+        assert!(!serialized.contains(forbidden), "audit leaked {forbidden}");
+    }
+}
+
+#[test]
+fn issue_edit_audit_only_names_fields_whose_values_changed() {
+    let (app, _project, _issue) = initialized_issue();
+
+    app.command()
+        .args([
+            "issue",
+            "edit",
+            "1",
+            "--project",
+            "bettr",
+            "--revision",
+            "1",
+            "--title",
+            "secret title",
+            "--priority",
+            "critical",
+        ])
+        .assert()
+        .success();
+
+    let events = json_data(
+        app.command()
+            .args(["audit", "list", "--operation", "issue_edit", "--json"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(events.as_array().unwrap().len(), 1);
+    assert_eq!(events[0]["changed_fields"], serde_json::json!(["priority"]));
 }

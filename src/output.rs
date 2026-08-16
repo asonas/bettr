@@ -51,6 +51,25 @@ pub fn write_success(data: impl serde::Serialize) {
     );
 }
 
+pub fn write_project_human(project: &crate::domain::Project) {
+    println!("{} {}", project.id, escape_terminal_controls(&project.name));
+}
+
+pub fn write_projects_human(projects: &[crate::domain::Project]) {
+    for project in projects {
+        write_project_human(project);
+    }
+}
+
+pub fn write_issue_created_human(project: &str, issue: &crate::domain::Issue) {
+    println!(
+        "{}#{} {}",
+        escape_terminal_controls(project),
+        issue.number,
+        escape_terminal_controls(&issue.title)
+    );
+}
+
 pub fn write_issue_human(project: &str, issue: &crate::domain::Issue) {
     println!("{}#{}", escape_terminal_controls(project), issue.number);
     println!("state: {}", issue.state.as_str());
@@ -100,7 +119,7 @@ pub fn write_issue_history_human(events: &[crate::domain::DomainEvent]) {
             event.sequence,
             escape_terminal_controls(&event.event_type),
             revision,
-            event.created_at.to_rfc3339(),
+            event.created_at.with_timezone(&chrono::Local).to_rfc3339(),
             escape_terminal_controls(&event.metadata.to_string())
         );
     }
@@ -122,7 +141,7 @@ pub fn write_audit_events_human(events: &[crate::app::AuditEvent]) {
         );
         println!(
             "{} {} {} {} {}",
-            event.finished_at.to_rfc3339(),
+            event.finished_at.with_timezone(&chrono::Local).to_rfc3339(),
             escape_terminal_controls(&event.operation),
             event.outcome,
             event.exit_code,
