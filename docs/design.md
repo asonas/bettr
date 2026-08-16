@@ -14,7 +14,14 @@ bettrは[[Rust]]製の単一バイナリとし、macOSとLinuxを正式に対応
 
 SQLiteはWALモード、短いトランザクション、busy timeout、自動再試行を用います。ロックを取得できない場合は明示的に失敗します。同一Issueに対する更新競合はリビジョン番号による楽観的ロックで検出します。既定のデータベースに加えて任意のSQLiteファイルを指定できますが、未知のパスに空のデータベースを暗黙作成せず、初期化には`bettr init`を要求します。
 
-通常のローカル利用で別用途のSQLiteを誤指定しても変更しないよう、既存ファイルはSQLiteで開く前にheaderを副作用なく読み、bettr固有のapplication IDとschema versionを確認します。通過後はread-write接続を開き、その同じ接続上でidentityを再確認してからWALなどの接続設定を有効にします。拒否時は既存bytesを変更せず、header preflightによって`-wal`、`-shm`、`-journal`を新規作成しません。
+通常のローカル利用で別用途のSQLiteを誤指定しても変更しないよう、初期化済みデータベースを必要とするコマンドは、選択したpathが通常ファイル（symlinkの場合はその参照先）であることをSQLiteで開く前に確認します。
+通常ファイルであればheaderを副作用なく読み、bettr固有のapplication IDとschema versionを検査します。
+通過後はread-write接続を開き、その同じ接続上でidentityを再確認してからWALなどの接続設定を有効にします。
+拒否時は既存bytesを変更せず、header preflightによって`-wal`、`-shm`、`-journal`を新規作成しません。
+
+`bettr init`と`bettr context`はこの終了契約の対象外です。
+既存pathに対する`init`はexit 2の`database_already_initialized`を返します。
+別用途のSQLiteを指定した`context`はデータベースを作成または変更せず、解決したpathを返してexit 0で終了します。
 
 このMVPの保証は非敵対的な誤指定を対象とし、完全なファイルシステム安全性は主張しません。identity確認とopenの間に敵対的な別プロセスが選択pathを意図的に置換するTOCTOUは保証外です。
 

@@ -21,6 +21,12 @@ fn read_sqlite_header_identity(
 ) -> Result<DatabaseIdentity, crate::error::AppError> {
     use std::io::Read as _;
 
+    let metadata =
+        std::fs::metadata(path).map_err(|_| crate::error::AppError::DatabaseNotInitialized)?;
+    if !metadata.is_file() {
+        return Err(crate::error::AppError::DatabaseNotInitialized);
+    }
+
     let mut header = [0_u8; 100];
     let mut file =
         std::fs::File::open(path).map_err(|_| crate::error::AppError::DatabaseNotInitialized)?;

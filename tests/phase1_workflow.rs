@@ -28,8 +28,15 @@ fn sqlite_sidecar(path: &std::path::Path, suffix: &str) -> std::path::PathBuf {
     sidecar.into()
 }
 
+fn assert_database_unchanged(app: &crate::support::TestApp, expected_bytes: &[u8]) {
+    assert_eq!(std::fs::read(&app.database).unwrap(), expected_bytes);
+    for suffix in ["-wal", "-shm", "-journal"] {
+        assert!(!sqlite_sidecar(&app.database, suffix).exists());
+    }
+}
+
 #[test]
-fn unrelated_sqlite_database_is_rejected_without_changes() {
+fn unrelated_sqlite_database_uses_command_specific_contracts_without_changes() {
     let app = crate::support::TestApp::new();
     let connection = rusqlite::Connection::open(&app.database).unwrap();
     connection
@@ -41,6 +48,25 @@ fn unrelated_sqlite_database_is_rejected_without_changes() {
     drop(connection);
     let expected_bytes = std::fs::read(&app.database).unwrap();
 
+    let init = app.command().args(["init", "--json"]).output().unwrap();
+    assert_eq!(init.status.code(), Some(2));
+    let init_response: serde_json::Value = serde_json::from_slice(&init.stderr).unwrap();
+    assert_eq!(
+        init_response["error"]["code"],
+        "database_already_initialized"
+    );
+    assert_database_unchanged(&app, &expected_bytes);
+
+    let context = app.command().args(["context", "--json"]).output().unwrap();
+    assert_eq!(context.status.code(), Some(0));
+    let context_response: serde_json::Value = serde_json::from_slice(&context.stdout).unwrap();
+    assert_eq!(context_response["schema_version"], 1);
+    assert_eq!(
+        context_response["data"]["database"]["value"],
+        app.database.to_str().unwrap()
+    );
+    assert_database_unchanged(&app, &expected_bytes);
+
     let output = app
         .command()
         .args(["project", "list", "--json"])
@@ -51,10 +77,7 @@ fn unrelated_sqlite_database_is_rejected_without_changes() {
     let response: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(response["schema_version"], 1);
     assert_eq!(response["error"]["code"], "database_not_initialized");
-    assert_eq!(std::fs::read(&app.database).unwrap(), expected_bytes);
-    for suffix in ["-wal", "-shm", "-journal"] {
-        assert!(!sqlite_sidecar(&app.database, suffix).exists());
-    }
+    assert_database_unchanged(&app, &expected_bytes);
 }
 
 #[test]

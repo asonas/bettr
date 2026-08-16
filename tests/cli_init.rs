@@ -328,6 +328,43 @@ fn project_list_rejects_a_non_sqlite_file_without_side_effects() {
     assert_project_list_rejected_without_file_changes(&app, &bytes, "private database contents");
 }
 
+#[cfg(unix)]
+#[test]
+fn project_list_rejects_a_fifo_without_waiting_for_a_writer() {
+    let app = crate::support::TestApp::new();
+    let status = std::process::Command::new("mkfifo")
+        .arg(&app.database)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let output = app
+        .command()
+        .args(["project", "list", "--json"])
+        .timeout(std::time::Duration::from_secs(1))
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+    let response: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(response["error"]["code"], "database_not_initialized");
+}
+
+#[cfg(unix)]
+#[test]
+fn project_list_accepts_a_symlink_to_a_valid_bettr_database() {
+    let app = crate::support::TestApp::new();
+    app.command().arg("init").assert().success();
+    let target = app.dir.path().join("target.db");
+    std::fs::rename(&app.database, &target).unwrap();
+    std::os::unix::fs::symlink(&target, &app.database).unwrap();
+
+    app.command()
+        .args(["project", "list", "--json"])
+        .assert()
+        .success();
+}
+
 #[test]
 fn project_list_accepts_a_valid_bettr_database() {
     let app = crate::support::TestApp::new();

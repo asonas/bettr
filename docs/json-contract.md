@@ -86,7 +86,7 @@ JSON Issue objects also include the immutable Issue UUID in `id`, the immutable 
 | 5 | SQLite remained busy beyond the configured wait | `database_busy` |
 | 10 | Internal failure | `internal_error` |
 
-Selecting an existing SQLite file that does not have the current bettr application ID and schema version exits 3 with:
+When a command that requires an initialized database selects an existing SQLite file without the current bettr application ID and schema version, the identity preflight rejects it with exit 3:
 
 ```json
 {
@@ -98,7 +98,11 @@ Selecting an existing SQLite file that does not have the current bettr applicati
 }
 ```
 
-For normal local use, bettr checks the file header without opening SQLite, then rechecks the identity on the opened connection before enabling connection settings. This protects an unrelated SQLite database from accidental path selection without changing its existing bytes or creating SQLite sidecars during the header preflight. It is not an adversary-resistant filesystem guarantee: deliberate path replacement by another process during the identity-check/open window is outside the MVP contract.
+For normal local use, bettr verifies that the selected path resolves to a regular file and checks its header without opening SQLite, then rechecks the identity on the opened connection before enabling connection settings. This protects an unrelated SQLite database from accidental path selection without changing its existing bytes or creating SQLite sidecars during the header preflight.
+
+`init` and `context` do not use the exit 3 contract above. When the selected path already exists, `init --json` exits 2 with `database_already_initialized`. When an unrelated SQLite path is selected, `context --json` returns the resolved context in the success envelope and exits 0 without creating or changing the database.
+
+The preflight is not an adversary-resistant filesystem guarantee: deliberate path replacement by another process during the identity-check/open window is outside the MVP contract.
 
 The success envelope above is the exit-code 0 response from the acceptance fixture's Issue creation. The same fixture yields these input, lookup, and conflict examples:
 
