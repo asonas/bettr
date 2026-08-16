@@ -139,6 +139,10 @@ fn web_serves_status_and_embedded_assets() {
     assert!(body.contains("id=\"updated-nav\""));
     assert!(body.contains("id=\"updated-menu\""));
     assert!(!body.contains("id=\"update-banner\""));
+    assert!(!body.contains("id=\"search-nav\""));
+    assert!(!body.contains("data-nav=\"projects\""));
+    assert!(!body.contains("class=\"project-nav-label\""));
+    assert!(body.contains("data-nav=\"recent\""));
     assert!(body.contains("id=\"project-nav-list\""));
     assert!(body.contains("<script type=\"module\" src=\"/app.js\"></script>"));
 

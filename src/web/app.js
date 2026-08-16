@@ -24,7 +24,7 @@ export function createWebController({
   const updatedNav = document.querySelector("#updated-nav");
   const updatedCount = document.querySelector("#updated-count");
   const updatedMenu = document.querySelector("#updated-menu");
-  const state = { status: null, snapshot: "", updatedIssues: new Set(), project: "", search: "" };
+  const state = { status: null, snapshot: "", updatedIssues: new Set(), project: "" };
   let statusPollInFlight = false;
   let projectNavInFlight = false;
   let projectNavSnapshot = "";
@@ -74,17 +74,11 @@ export function createWebController({
     </button>`;
   }
 
-  function setPage(title, eyebrow, summary = "") {
-    breadcrumbs.innerHTML = `<span>${escapeHtml(title)}</span>`;
-    return `<div class="page-header"><div><p class="eyebrow">${escapeHtml(eyebrow)}</p><h1>${escapeHtml(title)}</h1>${summary ? `<p class="page-summary">${escapeHtml(summary)}</p>` : ""}</div></div>`;
-  }
-
   function renderProjects(project = "") {
     state.project = project;
     setActiveProjectNav(project);
     breadcrumbs.innerHTML = project ? `<a href="#/projects">Projects</a><span> / ${escapeHtml(project)}</span>` : "<span>Projects</span>";
-    app.innerHTML = `<div class="toolbar"><label class="search-box"><span aria-hidden="true">⌕</span><span class="sr-only">Search Issues</span><input id="issue-search" type="search" value="${escapeHtml(state.search)}" placeholder="Search title or body" autocomplete="off" /></label></div><div id="kanban-board" class="kanban-board" aria-label="Issue board"></div>`;
-    document.querySelector("#issue-search").addEventListener("input", (event) => { state.search = event.target.value; renderKanban(); });
+    app.innerHTML = `<div id="kanban-board" class="kanban-board" aria-label="Issue board"></div>`;
     renderKanban();
   }
 
@@ -96,12 +90,9 @@ export function createWebController({
       return;
     }
     const focusedCard = document.activeElement?.matches(".kanban-card") ? issueKey({ project: document.activeElement.dataset.project, number: document.activeElement.dataset.number }) : "";
-    const query = state.search.trim().toLowerCase();
     const issues = stateApi.allIssues(state.status).filter((item) => {
       if (state.project && item.project !== state.project) return false;
-      if (!query) return true;
-      const issue = item.issue;
-      return [item.project, issue.title, issue.body, issue.priority, issue.assignee_name].filter(Boolean).join(" ").toLowerCase().includes(query);
+      return true;
     });
     board.innerHTML = stateApi.kanbanColumns.map(([key, title]) => {
       const columnIssues = issues.filter((item) => item.issue.state === key);
@@ -133,7 +124,7 @@ export function createWebController({
     breadcrumbs.innerHTML = "<span>Recent</span>";
     const focusedIssue = document.activeElement?.matches(".issue-row") ? issueKey({ project: document.activeElement.dataset.project, number: document.activeElement.dataset.number }) : "";
     const items = stateApi.allIssues(state.status).sort((a, b) => new Date(b.issue.updated_at) - new Date(a.issue.updated_at));
-    app.innerHTML = setPage("Recent", "Activity", "Recently updated Issues across the workspace.") + issueList(items, "No recent updates");
+    app.innerHTML = issueList(items, "No recent updates");
     bindIssueRows();
     if (focusedIssue) [...document.querySelectorAll(".issue-row")].find((row) => issueKey({ project: row.dataset.project, number: row.dataset.number }) === focusedIssue)?.focus();
   }
@@ -342,7 +333,6 @@ export function createWebController({
     updatedNav?.addEventListener("click", toggleUpdatedMenu);
     document.addEventListener("keydown", handleDocumentKeydown);
     document.addEventListener("click", handleDocumentClick);
-    document.querySelector("#search-nav").addEventListener("click", () => { location.hash = "#/projects"; window.setTimeout(() => document.querySelector("#issue-search")?.focus(), 0); });
     document.querySelector("#theme-toggle").addEventListener("click", () => { const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; window.localStorage.setItem("bettr-theme", next); document.documentElement.dataset.theme = next; });
     window.addEventListener("hashchange", route);
     document.documentElement.dataset.theme = window.localStorage.getItem("bettr-theme") || (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light");

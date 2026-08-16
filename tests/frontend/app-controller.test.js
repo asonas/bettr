@@ -1,4 +1,4 @@
-import { getAllByRole, getByRole } from "@testing-library/dom";
+import { getAllByRole, getByRole, queryByText } from "@testing-library/dom";
 import { describe, expect, it, vi } from "vitest";
 
 const status = {
@@ -27,7 +27,7 @@ function mountShell() {
     <div id="connection-state"></div><div id="project-nav-list"></div>
     <button id="updated-nav" type="button" aria-label="Updated Issues" aria-expanded="false"><span id="updated-count"></span></button>
     <div id="updated-menu" role="menu" aria-label="Updated Issues" hidden></div>
-    <button id="search-nav"></button><button id="theme-toggle"></button>
+    <button id="theme-toggle"></button>
   `;
 }
 
@@ -48,5 +48,21 @@ describe("web controller", () => {
       "Cancelled",
     ]);
     expect(getByRole(document, "button", { name: /Ship the board/ })).toBeTruthy();
+    expect(document.querySelector("#issue-search")).toBeNull();
+    expect(document.querySelector(".toolbar")).toBeNull();
+  });
+
+  it("keeps Recent as a list without the activity heading or summary copy", async () => {
+    mountShell();
+    const { createWebController } = await import("../../src/web/app.js");
+    const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: status }) });
+    const controller = createWebController({ fetch });
+
+    controller.state.status = status;
+    await controller.renderRecent();
+
+    expect(document.querySelector(".page-header")).toBeNull();
+    expect(queryByText(document, "Activity")).toBeNull();
+    expect(queryByText(document, "Recently updated Issues across the workspace.")).toBeNull();
   });
 });

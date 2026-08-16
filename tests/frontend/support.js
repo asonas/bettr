@@ -5,7 +5,7 @@ export function mountShell() {
     <div id="connection-state"></div><div id="project-nav-list"></div>
     <button id="updated-nav" type="button" aria-label="Updated Issues" aria-expanded="false"><span id="updated-count"></span></button>
     <div id="updated-menu" role="menu" aria-label="Updated Issues" hidden></div>
-    <button id="search-nav"></button><button id="theme-toggle"></button>
+    <button id="theme-toggle"></button>
   `;
 }
 
