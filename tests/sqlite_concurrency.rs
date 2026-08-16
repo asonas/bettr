@@ -722,7 +722,7 @@ fn concurrent_database_opens_apply_schema_migration_once() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        2
+        3
     );
     assert_eq!(
         connection
@@ -747,13 +747,23 @@ fn concurrent_database_opens_apply_schema_migration_once() {
     assert_eq!(
         connection
             .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 3",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
                 "SELECT COUNT(*) FROM audit_events
                  WHERE operation = 'schema_migrate' AND success = 1",
                 [],
                 |row| row.get::<_, i64>(0),
             )
             .unwrap(),
-        1
+        2
     );
     let integrity: String = connection
         .query_row("PRAGMA integrity_check", [], |row| row.get(0))

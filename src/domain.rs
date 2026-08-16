@@ -414,6 +414,135 @@ pub struct IssueListItem {
     pub issue: Issue,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IssueReference {
+    pub project: String,
+    pub number: i64,
+}
+
+impl IssueReference {
+    pub fn parse(
+        value: &str,
+        default_project: Option<&str>,
+    ) -> Result<Self, crate::error::AppError> {
+        let (project, number) = match value.rsplit_once('#') {
+            Some((project, number)) => (project.to_owned(), number),
+            None => (
+                default_project
+                    .ok_or_else(|| {
+                        crate::error::AppError::InvalidInput(
+                            "issue reference must use PROJECT#NUMBER or provide --project"
+                                .to_owned(),
+                        )
+                    })?
+                    .to_owned(),
+                value,
+            ),
+        };
+        validate_project_name(&project)?;
+        let number = number.parse::<i64>().map_err(|_| {
+            crate::error::AppError::InvalidInput(
+                "issue reference number must be a positive integer".to_owned(),
+            )
+        })?;
+        if number < 1 {
+            return Err(crate::error::AppError::InvalidInput(
+                "issue reference number must be positive".to_owned(),
+            ));
+        }
+        Ok(Self { project, number })
+    }
+
+    pub fn label(&self) -> String {
+        format!("{}#{}", self.project, self.number)
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct IssueDependency {
+    pub blocker: String,
+    pub blocked: String,
+    pub relation: &'static str,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct IssueParent {
+    pub child: String,
+    pub parent: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct IssueLease {
+    pub agent: String,
+    pub session_id: String,
+    pub claimed_at: chrono::DateTime<chrono::Utc>,
+    pub heartbeat_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub lease_revision: i64,
+    pub stale: bool,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ClaimedIssue {
+    pub issue: Issue,
+    pub lease: IssueLease,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct DecisionRequest {
+    pub id: uuid::Uuid,
+    pub issue: String,
+    pub question: String,
+    pub background: String,
+    pub requester_kind: Option<InitiatorKind>,
+    pub requester_name: Option<String>,
+    pub requester_session_id: Option<String>,
+    pub status: String,
+    pub answer: Option<String>,
+    pub resolver_kind: Option<InitiatorKind>,
+    pub resolver_name: Option<String>,
+    pub resolver_session_id: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub resolved_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct EventRecord {
+    pub sequence: i64,
+    pub event_type: String,
+    pub project_id: Option<uuid::Uuid>,
+    pub issue_id: Option<uuid::Uuid>,
+    pub changed_fields: Vec<String>,
+    pub revision: Option<i64>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub issue: Option<Issue>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct EventPage {
+    pub next_cursor: i64,
+    pub has_more: bool,
+    pub events: Vec<EventRecord>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct CapabilitySet {
+    pub json_contract_version: u32,
+    pub cli_version: &'static str,
+    pub capabilities: std::collections::BTreeMap<&'static str, bool>,
+}
+
+pub fn validate_decision_text(name: &str, value: &str) -> Result<(), crate::error::AppError> {
+    if value.trim().is_empty() {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "{name} must not be empty"
+        )));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Status {
     pub attention: Vec<IssueListItem>,

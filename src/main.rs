@@ -204,6 +204,119 @@ fn run(
                         crate::output::OutputMode::Json => crate::output::write_success(history),
                     }
                 }
+                crate::cli::IssueSubcommand::Dependency(command) => match command.command {
+                    crate::cli::IssueDependencySubcommand::Add(command) => {
+                        let context = crate::domain::ExecutionContext::resolve()?;
+                        let relation = app.add_dependency(
+                            &command.blocker,
+                            &command.blocked,
+                            project.as_deref(),
+                            &context,
+                        )?;
+                        match output_mode {
+                            crate::output::OutputMode::Human => {
+                                crate::output::write_issue_dependency_human(&relation)
+                            }
+                            crate::output::OutputMode::Json => {
+                                crate::output::write_success(relation)
+                            }
+                        }
+                    }
+                    crate::cli::IssueDependencySubcommand::Remove(command) => {
+                        let context = crate::domain::ExecutionContext::resolve()?;
+                        let relation = app.remove_dependency(
+                            &command.blocker,
+                            &command.blocked,
+                            project.as_deref(),
+                            &context,
+                        )?;
+                        match output_mode {
+                            crate::output::OutputMode::Human => {
+                                crate::output::write_issue_dependency_human(&relation)
+                            }
+                            crate::output::OutputMode::Json => {
+                                crate::output::write_success(relation)
+                            }
+                        }
+                    }
+                    crate::cli::IssueDependencySubcommand::List(command) => {
+                        let relations =
+                            app.list_dependencies(&command.reference, project.as_deref())?;
+                        match output_mode {
+                            crate::output::OutputMode::Human => {
+                                crate::output::write_issue_dependencies_human(&relations)
+                            }
+                            crate::output::OutputMode::Json => {
+                                crate::output::write_success(relations)
+                            }
+                        }
+                    }
+                },
+                crate::cli::IssueSubcommand::Parent(command) => match command.command {
+                    crate::cli::IssueParentSubcommand::Set(command) => {
+                        let context = crate::domain::ExecutionContext::resolve()?;
+                        let relation = app.set_parent(
+                            &command.child,
+                            &command.parent,
+                            project.as_deref(),
+                            &context,
+                        )?;
+                        match output_mode {
+                            crate::output::OutputMode::Human => {
+                                crate::output::write_issue_parent_human(&relation)
+                            }
+                            crate::output::OutputMode::Json => {
+                                crate::output::write_success(relation)
+                            }
+                        }
+                    }
+                    crate::cli::IssueParentSubcommand::List(command) => {
+                        let relations = app.list_parent(&command.reference, project.as_deref())?;
+                        match output_mode {
+                            crate::output::OutputMode::Human => {
+                                crate::output::write_issue_parents_human(&relations)
+                            }
+                            crate::output::OutputMode::Json => {
+                                crate::output::write_success(relations)
+                            }
+                        }
+                    }
+                },
+                crate::cli::IssueSubcommand::Claim(command) => {
+                    let context = crate::domain::ExecutionContext::resolve()?;
+                    let claimed = app.claim_issue(project.as_deref(), command.number, &context)?;
+                    match output_mode {
+                        crate::output::OutputMode::Human => {
+                            crate::output::write_claimed_issue_human(&claimed)
+                        }
+                        crate::output::OutputMode::Json => crate::output::write_success(claimed),
+                    }
+                }
+                crate::cli::IssueSubcommand::Heartbeat(command) => {
+                    let project =
+                        crate::require_project(&mut app, project.as_deref(), "issue_heartbeat")?;
+                    let context = crate::domain::ExecutionContext::resolve()?;
+                    let claimed = app.heartbeat_issue(project, command.number, &context)?;
+                    match output_mode {
+                        crate::output::OutputMode::Human => {
+                            crate::output::write_claimed_issue_human(&claimed)
+                        }
+                        crate::output::OutputMode::Json => crate::output::write_success(claimed),
+                    }
+                }
+                crate::cli::IssueSubcommand::Takeover(command) => {
+                    let project =
+                        crate::require_project(&mut app, project.as_deref(), "issue_takeover")?;
+                    let context = crate::domain::ExecutionContext::resolve()?;
+                    let claimed =
+                        app.takeover_issue(project, command.number, &command.reason, &context)?;
+                    match output_mode {
+                        crate::output::OutputMode::Human => {
+                            crate::output::write_claimed_issue_human(&claimed)
+                        }
+                        crate::output::OutputMode::Json => crate::output::write_success(claimed),
+                    }
+                }
                 crate::cli::IssueSubcommand::Start(command) => run_issue_transition(
                     &mut app,
                     project.as_deref(),
@@ -252,6 +365,73 @@ fn run(
                     crate::domain::Transition::reopen(command.reason),
                     output_mode,
                 )?,
+            }
+            Ok(())
+        }
+        crate::cli::Command::Decision(decision_command) => {
+            let database = crate::store::Database::open(&database_path)?;
+            let mut app = crate::app::App::new(database);
+            match decision_command.command {
+                crate::cli::DecisionSubcommand::Request(command) => {
+                    let project =
+                        crate::require_project(&mut app, project.as_deref(), "decision_request")?;
+                    let context = crate::domain::ExecutionContext::resolve()?;
+                    let request = app.request_decision(
+                        project,
+                        command.number,
+                        &command.question,
+                        &command.background,
+                        &context,
+                    )?;
+                    match output_mode {
+                        crate::output::OutputMode::Human => {
+                            crate::output::write_decision_human(&request)
+                        }
+                        crate::output::OutputMode::Json => crate::output::write_success(request),
+                    }
+                }
+                crate::cli::DecisionSubcommand::Resolve(command) => {
+                    let context = crate::domain::ExecutionContext::resolve()?;
+                    let request = app.resolve_decision(
+                        &command.request_id,
+                        &command.answer,
+                        command.next_state,
+                        &context,
+                    )?;
+                    match output_mode {
+                        crate::output::OutputMode::Human => {
+                            crate::output::write_decision_human(&request)
+                        }
+                        crate::output::OutputMode::Json => crate::output::write_success(request),
+                    }
+                }
+            }
+            Ok(())
+        }
+        crate::cli::Command::Event(event_command) => {
+            let database = crate::store::Database::open(&database_path)?;
+            let mut app = crate::app::App::new(database);
+            match event_command.command {
+                crate::cli::EventSubcommand::List(command) => {
+                    let page =
+                        app.list_events(command.after, command.limit, command.include_issue)?;
+                    match output_mode {
+                        crate::output::OutputMode::Human => {
+                            crate::output::write_event_page_human(&page)
+                        }
+                        crate::output::OutputMode::Json => crate::output::write_success(page),
+                    }
+                }
+            }
+            Ok(())
+        }
+        crate::cli::Command::Capabilities(_) => {
+            let capabilities = crate::app::App::capabilities();
+            match output_mode {
+                crate::output::OutputMode::Human => {
+                    crate::output::write_capabilities_human(&capabilities)
+                }
+                crate::output::OutputMode::Json => crate::output::write_success(capabilities),
             }
             Ok(())
         }

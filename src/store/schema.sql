@@ -83,5 +83,65 @@ CREATE INDEX audit_events_project_id ON audit_events(project_id);
 CREATE INDEX audit_events_operation ON audit_events(operation);
 CREATE INDEX audit_events_finished_at ON audit_events(finished_at);
 
+CREATE TABLE issue_dependencies (
+    id TEXT PRIMARY KEY,
+    blocker_issue_id TEXT NOT NULL REFERENCES issues(id),
+    blocked_issue_id TEXT NOT NULL REFERENCES issues(id),
+    relation TEXT NOT NULL CHECK (relation = 'blocks'),
+    created_at TEXT NOT NULL,
+    UNIQUE(blocker_issue_id, blocked_issue_id, relation),
+    CHECK (blocker_issue_id <> blocked_issue_id)
+);
+
+CREATE INDEX issue_dependencies_blocker
+    ON issue_dependencies(blocker_issue_id);
+CREATE INDEX issue_dependencies_blocked
+    ON issue_dependencies(blocked_issue_id);
+
+CREATE TABLE issue_parents (
+    child_issue_id TEXT PRIMARY KEY REFERENCES issues(id),
+    parent_issue_id TEXT NOT NULL REFERENCES issues(id),
+    created_at TEXT NOT NULL,
+    CHECK (child_issue_id <> parent_issue_id)
+);
+
+CREATE INDEX issue_parents_parent
+    ON issue_parents(parent_issue_id);
+
+CREATE TABLE issue_leases (
+    issue_id TEXT PRIMARY KEY REFERENCES issues(id),
+    agent TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    claimed_at TEXT NOT NULL,
+    heartbeat_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    lease_revision INTEGER NOT NULL CHECK (lease_revision > 0)
+);
+
+CREATE INDEX issue_leases_expires_at
+    ON issue_leases(expires_at);
+
+CREATE TABLE decision_requests (
+    id TEXT PRIMARY KEY,
+    issue_id TEXT NOT NULL REFERENCES issues(id),
+    question TEXT NOT NULL,
+    background TEXT NOT NULL,
+    requester_kind TEXT,
+    requester_name TEXT,
+    requester_session_id TEXT,
+    status TEXT NOT NULL CHECK (status IN ('open', 'resolved')),
+    answer TEXT,
+    resolver_kind TEXT,
+    resolver_name TEXT,
+    resolver_session_id TEXT,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT
+);
+
+CREATE INDEX decision_requests_issue_status
+    ON decision_requests(issue_id, status);
+CREATE INDEX decision_requests_status
+    ON decision_requests(status);
+
 PRAGMA application_id = 1112822866;
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;

@@ -580,6 +580,400 @@ impl App {
         }
     }
 
+    pub fn add_dependency(
+        &mut self,
+        blocker: &str,
+        blocked: &str,
+        default_project: Option<&str>,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::IssueDependency, crate::error::AppError> {
+        let started_at = chrono::Utc::now();
+        let subject = default_project
+            .map(|project| self.database.project_audit_subject(project))
+            .unwrap_or_default();
+        let result = (|| {
+            let blocker = crate::domain::IssueReference::parse(blocker, default_project)?;
+            let blocked = crate::domain::IssueReference::parse(blocked, default_project)?;
+            self.database.add_dependency(&blocker, &blocked, context)
+        })();
+        match result {
+            Ok(relation) => Ok(relation),
+            Err(error) => {
+                if let Err(audit_error) = self.database.record_failed_operation(
+                    "issue_dependency_add",
+                    context,
+                    &error,
+                    &subject,
+                    started_at,
+                ) {
+                    return Err(Self::failure_audit_error(
+                        "issue_dependency_add",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn remove_dependency(
+        &mut self,
+        blocker: &str,
+        blocked: &str,
+        default_project: Option<&str>,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::IssueDependency, crate::error::AppError> {
+        let started_at = chrono::Utc::now();
+        let subject = default_project
+            .map(|project| self.database.project_audit_subject(project))
+            .unwrap_or_default();
+        let result = (|| {
+            let blocker = crate::domain::IssueReference::parse(blocker, default_project)?;
+            let blocked = crate::domain::IssueReference::parse(blocked, default_project)?;
+            self.database.remove_dependency(&blocker, &blocked, context)
+        })();
+        match result {
+            Ok(relation) => Ok(relation),
+            Err(error) => {
+                if let Err(audit_error) = self.database.record_failed_operation(
+                    "issue_dependency_remove",
+                    context,
+                    &error,
+                    &subject,
+                    started_at,
+                ) {
+                    return Err(Self::failure_audit_error(
+                        "issue_dependency_remove",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn list_dependencies(
+        &mut self,
+        reference: &str,
+        default_project: Option<&str>,
+    ) -> Result<Vec<crate::domain::IssueDependency>, crate::error::AppError> {
+        let started_at = chrono::Utc::now();
+        let context = crate::domain::ExecutionContext::resolve()?;
+        let subject = default_project
+            .map(|project| self.database.project_audit_subject(project))
+            .unwrap_or_default();
+        let result = (|| {
+            let reference = crate::domain::IssueReference::parse(reference, default_project)?;
+            self.database.list_dependencies(&reference)
+        })();
+        match result {
+            Ok(relations) => {
+                self.database.record_successful_operation(
+                    "issue_dependency_list",
+                    &context,
+                    &subject,
+                    &[],
+                    started_at,
+                )?;
+                Ok(relations)
+            }
+            Err(error) => {
+                if let Err(audit_error) = self.database.record_failed_operation(
+                    "issue_dependency_list",
+                    &context,
+                    &error,
+                    &subject,
+                    started_at,
+                ) {
+                    return Err(Self::failure_audit_error(
+                        "issue_dependency_list",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn set_parent(
+        &mut self,
+        child: &str,
+        parent: &str,
+        default_project: Option<&str>,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::IssueParent, crate::error::AppError> {
+        let started_at = chrono::Utc::now();
+        let subject = default_project
+            .map(|project| self.database.project_audit_subject(project))
+            .unwrap_or_default();
+        let result = (|| {
+            let child = crate::domain::IssueReference::parse(child, default_project)?;
+            let parent = crate::domain::IssueReference::parse(parent, default_project)?;
+            self.database.set_parent(&child, &parent, context)
+        })();
+        match result {
+            Ok(relation) => Ok(relation),
+            Err(error) => {
+                if let Err(audit_error) = self.database.record_failed_operation(
+                    "issue_parent_set",
+                    context,
+                    &error,
+                    &subject,
+                    started_at,
+                ) {
+                    return Err(Self::failure_audit_error(
+                        "issue_parent_set",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn list_parent(
+        &mut self,
+        reference: &str,
+        default_project: Option<&str>,
+    ) -> Result<Vec<crate::domain::IssueParent>, crate::error::AppError> {
+        let started_at = chrono::Utc::now();
+        let context = crate::domain::ExecutionContext::resolve()?;
+        let subject = default_project
+            .map(|project| self.database.project_audit_subject(project))
+            .unwrap_or_default();
+        let result = (|| {
+            let reference = crate::domain::IssueReference::parse(reference, default_project)?;
+            self.database.list_parent(&reference)
+        })();
+        match result {
+            Ok(relations) => {
+                self.database.record_successful_operation(
+                    "issue_parent_list",
+                    &context,
+                    &subject,
+                    &[],
+                    started_at,
+                )?;
+                Ok(relations)
+            }
+            Err(error) => {
+                if let Err(audit_error) = self.database.record_failed_operation(
+                    "issue_parent_list",
+                    &context,
+                    &error,
+                    &subject,
+                    started_at,
+                ) {
+                    return Err(Self::failure_audit_error(
+                        "issue_parent_list",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn claim_issue(
+        &mut self,
+        project: Option<&str>,
+        number: Option<i64>,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::ClaimedIssue, crate::error::AppError> {
+        let started_at = chrono::Utc::now();
+        let subject = project
+            .map(|project| self.database.project_audit_subject(project))
+            .unwrap_or_default();
+        match self.database.claim_issue(project, number, context) {
+            Ok(claimed) => Ok(claimed),
+            Err(error) => {
+                if let Err(audit_error) = self.database.record_failed_operation(
+                    "issue_claim",
+                    context,
+                    &error,
+                    &subject,
+                    started_at,
+                ) {
+                    return Err(Self::failure_audit_error(
+                        "issue_claim",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn request_decision(
+        &mut self,
+        project: &str,
+        number: i64,
+        question: &str,
+        background: &str,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::DecisionRequest, crate::error::AppError> {
+        let started_at = chrono::Utc::now();
+        let subject = self.database.project_audit_subject(project);
+        let result = (|| {
+            if number < 1 {
+                return Err(crate::error::AppError::InvalidInput(
+                    "issue number must be positive".to_owned(),
+                ));
+            }
+            crate::domain::validate_decision_text("decision question", question)?;
+            crate::domain::validate_decision_text("decision background", background)?;
+            self.database
+                .request_decision(project, number, question, background, context)
+        })();
+        match result {
+            Ok(request) => Ok(request),
+            Err(error) => {
+                if let Err(audit_error) = self.database.record_failed_operation(
+                    "decision_request",
+                    context,
+                    &error,
+                    &subject,
+                    started_at,
+                ) {
+                    return Err(Self::failure_audit_error(
+                        "decision_request",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn resolve_decision(
+        &mut self,
+        request_id: &str,
+        answer: &str,
+        next_state: crate::domain::IssueState,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::DecisionRequest, crate::error::AppError> {
+        let started_at = chrono::Utc::now();
+        let result = (|| {
+            let request_id = uuid::Uuid::parse_str(request_id).map_err(|_| {
+                crate::error::AppError::InvalidInput(
+                    "decision request id must be a UUID".to_owned(),
+                )
+            })?;
+            crate::domain::validate_decision_text("decision answer", answer)?;
+            self.database
+                .resolve_decision(request_id, answer, next_state, context)
+        })();
+        match result {
+            Ok(request) => Ok(request),
+            Err(error) => {
+                if let Err(audit_error) = self.database.record_failed_operation(
+                    "decision_resolve",
+                    context,
+                    &error,
+                    &crate::store::AuditSubject::default(),
+                    started_at,
+                ) {
+                    return Err(Self::failure_audit_error(
+                        "decision_resolve",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn heartbeat_issue(
+        &mut self,
+        project: &str,
+        number: i64,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::ClaimedIssue, crate::error::AppError> {
+        let started_at = chrono::Utc::now();
+        let crate::store::AuditedResult {
+            result: issue_result,
+            subject,
+        } = self.database.show_issue(project, number);
+        let result = (|| {
+            if number < 1 {
+                return Err(crate::error::AppError::InvalidInput(
+                    "issue number must be positive".to_owned(),
+                ));
+            }
+            let issue = issue_result?;
+            self.database.heartbeat_issue(&issue, context)
+        })();
+        match result {
+            Ok(claimed) => Ok(claimed),
+            Err(error) => {
+                if let Err(audit_error) = self.database.record_failed_operation(
+                    "issue_heartbeat",
+                    context,
+                    &error,
+                    &subject,
+                    started_at,
+                ) {
+                    return Err(Self::failure_audit_error(
+                        "issue_heartbeat",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn takeover_issue(
+        &mut self,
+        project: &str,
+        number: i64,
+        reason: &str,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::ClaimedIssue, crate::error::AppError> {
+        let started_at = chrono::Utc::now();
+        let crate::store::AuditedResult {
+            result: issue_result,
+            subject,
+        } = self.database.show_issue(project, number);
+        let result = (|| {
+            if number < 1 {
+                return Err(crate::error::AppError::InvalidInput(
+                    "issue number must be positive".to_owned(),
+                ));
+            }
+            let issue = issue_result?;
+            self.database.takeover_issue(&issue, reason, context)
+        })();
+        match result {
+            Ok(claimed) => Ok(claimed),
+            Err(error) => {
+                if let Err(audit_error) = self.database.record_failed_operation(
+                    "issue_takeover",
+                    context,
+                    &error,
+                    &subject,
+                    started_at,
+                ) {
+                    return Err(Self::failure_audit_error(
+                        "issue_takeover",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
     pub fn transition_issue(
         &mut self,
         project: &str,
@@ -690,22 +1084,42 @@ impl App {
             query: None,
             include_done: true,
         };
-        match self.database.list_issues(&filter) {
-            Ok(issues) => {
+        let result = (|| {
+            let issues = self.database.list_issues(&filter)?;
+            let stale = self.database.list_stale_issues(chrono::Utc::now())?;
+            let attention = self.database.list_attention_issues()?;
+            Ok((issues, stale, attention))
+        })();
+        match result {
+            Ok((issues, stale, attention)) => {
                 let mut status = crate::domain::Status {
-                    attention: Vec::new(),
-                    stale: Vec::new(),
+                    attention,
+                    stale,
                     blocked: Vec::new(),
                     recently_completed: Vec::new(),
                     active: Vec::new(),
                 };
                 for issue in issues {
+                    if status
+                        .attention
+                        .iter()
+                        .any(|attention| attention.issue.id == issue.issue.id)
+                    {
+                        continue;
+                    }
                     match issue.issue.state {
                         crate::domain::IssueState::Blocked => status.blocked.push(issue),
                         crate::domain::IssueState::Done | crate::domain::IssueState::Cancelled => {
                             status.recently_completed.push(issue);
                         }
                         crate::domain::IssueState::Todo | crate::domain::IssueState::InProgress => {
+                            if status
+                                .stale
+                                .iter()
+                                .any(|stale| stale.issue.id == issue.issue.id)
+                            {
+                                continue;
+                            }
                             status.active.push(issue)
                         }
                     }
@@ -731,6 +1145,78 @@ impl App {
                 }
                 Err(error)
             }
+        }
+    }
+
+    pub fn list_events(
+        &mut self,
+        after: i64,
+        limit: Option<i64>,
+        include_issue: bool,
+    ) -> Result<crate::domain::EventPage, crate::error::AppError> {
+        let started_at = chrono::Utc::now();
+        let context = crate::domain::ExecutionContext::resolve()?;
+        let result = (|| {
+            if after < 0 {
+                return Err(crate::error::AppError::InvalidInput(
+                    "event cursor must not be negative".to_owned(),
+                ));
+            }
+            let limit = limit.unwrap_or(100);
+            if !(1..=500).contains(&limit) {
+                return Err(crate::error::AppError::InvalidInput(
+                    "event limit must be between 1 and 500".to_owned(),
+                ));
+            }
+            self.database
+                .list_events(after, limit as usize, include_issue)
+        })();
+        match result {
+            Ok(page) => {
+                self.database.record_successful_operation(
+                    "event_list",
+                    &context,
+                    &crate::store::AuditSubject::default(),
+                    &[],
+                    started_at,
+                )?;
+                Ok(page)
+            }
+            Err(error) => {
+                if let Err(audit_error) = self.database.record_failed_operation(
+                    "event_list",
+                    &context,
+                    &error,
+                    &crate::store::AuditSubject::default(),
+                    started_at,
+                ) {
+                    return Err(Self::failure_audit_error(
+                        "event_list",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn capabilities() -> crate::domain::CapabilitySet {
+        crate::domain::CapabilitySet {
+            json_contract_version: 1,
+            cli_version: env!("CARGO_PKG_VERSION"),
+            capabilities: [
+                ("issue_dependencies", true),
+                ("issue_parent", true),
+                ("issue_claim", true),
+                ("issue_lease", true),
+                ("human_decisions", true),
+                ("event_cursor", true),
+                ("capabilities", true),
+                ("idempotency", false),
+            ]
+            .into_iter()
+            .collect(),
         }
     }
 

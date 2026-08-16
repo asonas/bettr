@@ -1,6 +1,6 @@
 # JSON and exit-code contract
 
-Phase 1 commands accept `--json`. Successful responses are written to standard output and failures are written to standard error. A process emits one JSON document for the command result.
+CLI commands accept `--json`. Successful responses are written to standard output and failures are written to standard error. A process emits one JSON document for the command result.
 
 ## Versioning and compatibility
 
@@ -35,6 +35,47 @@ Successful commands exit with code 0 and return:
 ```
 
 The type of `data` is command-specific. It can be an object, an array, or another JSON value.
+
+## Phase 2 coordination responses
+
+`issue claim`, `issue heartbeat`, and `issue takeover` return an object with `issue` and `lease`. The lease belongs to the `BETTR_AGENT` and `BETTR_SESSION_ID` pair. A heartbeat renews only lease timing; it does not change the Issue revision. An expired lease is shown under `status.data.stale` and is never reassigned automatically.
+
+`decision request` returns a request object with a UUID, `PROJECT#NUMBER` reference, question, background, requester context, and `status: "open"`. Creating the request changes the Issue to `blocked` in the same transaction. `decision resolve` records the answer and resolver context and applies the explicit `next_state`. An open request is exposed under `status.data.attention`; an Issue with any open request cannot transition to `done`.
+
+`issue dependency` and `issue parent` responses use structured `PROJECT#NUMBER` references. An unqualified Issue number requires `--project`. Dependencies are directed `blocks` edges; parent relations are one level deep.
+
+## Event cursor
+
+`event list --after CURSOR [--limit LIMIT] [--include-issue] --json` returns:
+
+```json
+{
+  "schema_version": 1,
+  "data": {
+    "next_cursor": 12,
+    "has_more": false,
+    "events": [
+      {
+        "sequence": 12,
+        "event_type": "issue_completed",
+        "project_id": "f77aef3e-6858-4f12-a1dc-785b71de8940",
+        "issue_id": "018f5f89-e8b6-4adb-90fb-0e72b3e49811",
+        "changed_fields": ["state", "summary", "verification"],
+        "revision": 6,
+        "created_at": "2026-08-15T09:30:00Z"
+      }
+    ]
+  }
+}
+```
+
+`after` is exclusive. `next_cursor` remains equal to `after` for an empty page and otherwise equals the last returned sequence. `has_more` indicates that another page exists. Events are ordered by sequence and expose only allowlisted changed-field names and target IDs. Reads, failures, and lease heartbeat renewals are not domain events. With `--include-issue`, the response includes an Issue snapshot read in the same SQLite transaction.
+
+Persist the cursor only after the page has been processed successfully. Consumers must ignore additive fields and stop when `json_contract_version` or the response `schema_version` is unsupported.
+
+## Capability discovery
+
+`capabilities --json` returns the JSON contract version, CLI version, and a boolean capability map. The checked-in source of truth is [`contracts/capabilities.json`](../contracts/capabilities.json). Consumers must invoke only capabilities whose value is `true`; `false` or unknown capabilities are unavailable.
 
 ## Error envelope
 
@@ -100,14 +141,14 @@ When a command that requires an initialized database selects an existing SQLite 
 
 For normal local use, bettr verifies that the selected path resolves to a regular file and checks its header without opening SQLite, then rechecks the identity on the opened connection before enabling connection settings. A known older bettr database schema is migrated in a single transaction before the command continues. This protects an unrelated SQLite database from accidental path selection without changing its existing bytes or creating SQLite sidecars during the header preflight.
 
-The SQLite database schema version is independent from the JSON response `schema_version`. The current database schema version is 2; version 1 is migrated automatically and its applied versions are recorded in `schema_migrations`. A bettr database with an unknown schema version is rejected before SQLite is opened for writing and exits 2:
+The SQLite database schema version is independent from the JSON response `schema_version`. The current database schema version is 3; versions 1 and 2 are migrated automatically and their applied versions are recorded in `schema_migrations`. A bettr database with an unknown schema version is rejected before SQLite is opened for writing and exits 2:
 
 ```json
 {
   "schema_version": 1,
   "error": {
     "code": "unsupported_database_schema_version",
-    "message": "database schema version 99 is unsupported; current version is 2",
+    "message": "database schema version 99 is unsupported; current version is 3",
     "details": {
       "found_version": 99,
       "current_version": 2

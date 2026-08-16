@@ -137,6 +137,90 @@ pub fn write_issue_history_human(events: &[crate::domain::DomainEvent]) {
     }
 }
 
+pub fn write_issue_dependency_human(relation: &crate::domain::IssueDependency) {
+    println!(
+        "{} {} {}",
+        escape_terminal_controls(&relation.blocker),
+        relation.relation,
+        escape_terminal_controls(&relation.blocked)
+    );
+}
+
+pub fn write_issue_dependencies_human(relations: &[crate::domain::IssueDependency]) {
+    for relation in relations {
+        write_issue_dependency_human(relation);
+    }
+}
+
+pub fn write_issue_parent_human(relation: &crate::domain::IssueParent) {
+    println!(
+        "{} parent {}",
+        escape_terminal_controls(&relation.child),
+        escape_terminal_controls(&relation.parent)
+    );
+}
+
+pub fn write_issue_parents_human(relations: &[crate::domain::IssueParent]) {
+    for relation in relations {
+        write_issue_parent_human(relation);
+    }
+}
+
+pub fn write_claimed_issue_human(claimed: &crate::domain::ClaimedIssue) {
+    println!(
+        "#{} [{}] {}",
+        claimed.issue.number,
+        claimed.issue.state.as_str(),
+        escape_terminal_controls(&claimed.issue.title)
+    );
+    println!(
+        "lease: {}",
+        escape_terminal_controls(&claimed.lease.session_id)
+    );
+    println!("expires_at: {}", claimed.lease.expires_at.to_rfc3339());
+}
+
+pub fn write_decision_human(request: &crate::domain::DecisionRequest) {
+    println!(
+        "{} {}",
+        request.id,
+        escape_terminal_controls(&request.issue)
+    );
+    println!("status: {}", request.status);
+    println!("question: {}", escape_terminal_controls(&request.question));
+    println!(
+        "background: {}",
+        escape_terminal_controls(&request.background)
+    );
+    if let Some(answer) = &request.answer {
+        println!("answer: {}", escape_terminal_controls(answer));
+    }
+}
+
+pub fn write_capabilities_human(capabilities: &crate::domain::CapabilitySet) {
+    println!(
+        "json_contract_version: {}",
+        capabilities.json_contract_version
+    );
+    println!("cli_version: {}", capabilities.cli_version);
+    for (name, available) in &capabilities.capabilities {
+        println!("{name}: {available}");
+    }
+}
+
+pub fn write_event_page_human(page: &crate::domain::EventPage) {
+    for event in &page.events {
+        println!(
+            "{} {} {}",
+            event.sequence,
+            escape_terminal_controls(&event.event_type),
+            event.created_at.with_timezone(&chrono::Local).to_rfc3339()
+        );
+    }
+    println!("next_cursor: {}", page.next_cursor);
+    println!("has_more: {}", page.has_more);
+}
+
 pub fn write_status_human(status: &crate::domain::Status) {
     write_status_section("attention", &status.attention);
     write_status_section("stale", &status.stale);
