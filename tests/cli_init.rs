@@ -64,7 +64,9 @@ fn init_creates_a_version_two_database_with_migration_history() {
     let migrations = connection
         .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
         .unwrap()
-        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
@@ -144,16 +146,20 @@ fn project_list_migrates_a_version_one_database_and_records_history() {
     );
     assert_eq!(
         connection
-            .query_row("SELECT COUNT(*) FROM projects WHERE name = 'bettr'", [], |row| {
-                row.get::<_, i64>(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM projects WHERE name = 'bettr'",
+                [],
+                |row| { row.get::<_, i64>(0) }
+            )
             .unwrap(),
         1
     );
     let migrations = connection
         .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
         .unwrap()
-        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
@@ -219,7 +225,10 @@ fn project_list_rejects_an_unknown_bettr_schema_version_without_changes() {
     assert_eq!(response["error"]["details"]["found_version"], 99);
     assert_eq!(response["error"]["details"]["current_version"], 2);
     assert_eq!(std::fs::read(&app.database).unwrap(), expected_bytes);
-    assert_eq!(directory_entries(app.dir.path()), expected_directory_entries);
+    assert_eq!(
+        directory_entries(app.dir.path()),
+        expected_directory_entries
+    );
     for suffix in ["-wal", "-shm", "-journal"] {
         assert!(!sqlite_sidecar(&app.database, suffix).exists());
     }

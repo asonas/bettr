@@ -53,6 +53,12 @@ CREATE TABLE domain_events (
 
 CREATE INDEX domain_events_sequence ON domain_events(sequence);
 
+CREATE TABLE schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at TEXT NOT NULL
+);
+
 CREATE TABLE audit_events (
     id TEXT PRIMARY KEY,
     occurred_at TEXT NOT NULL,
@@ -78,4 +84,4 @@ CREATE INDEX audit_events_operation ON audit_events(operation);
 CREATE INDEX audit_events_finished_at ON audit_events(finished_at);
 
 PRAGMA application_id = 1112822866;
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
