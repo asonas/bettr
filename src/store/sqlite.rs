@@ -3,7 +3,6 @@ pub struct Database {
 }
 
 const BETTR_APPLICATION_ID: u32 = 0x4254_5452;
-const BETTR_SCHEMA_VERSION: u32 = 1;
 
 struct DatabaseIdentity {
     application_id: u32,
@@ -11,8 +10,13 @@ struct DatabaseIdentity {
 }
 
 impl DatabaseIdentity {
-    fn is_current_bettr(&self) -> bool {
-        self.application_id == BETTR_APPLICATION_ID && self.user_version == BETTR_SCHEMA_VERSION
+    fn is_bettr_application(&self) -> bool {
+        self.application_id == BETTR_APPLICATION_ID
+    }
+
+    fn is_supported_bettr(&self) -> bool {
+        self.is_bettr_application()
+            && crate::store::migrations::is_supported_version(self.user_version)
     }
 }
 
@@ -137,8 +141,15 @@ impl Database {
     }
 
     pub fn open(path: &std::path::Path) -> Result<Self, crate::error::AppError> {
-        if !read_sqlite_header_identity(path)?.is_current_bettr() {
+        let identity = read_sqlite_header_identity(path)?;
+        if !identity.is_bettr_application() {
             return Err(crate::error::AppError::DatabaseNotInitialized);
+        }
+        if !crate::store::migrations::is_supported_version(identity.user_version) {
+            return Err(crate::error::AppError::UnsupportedDatabaseSchemaVersion {
+                found_version: identity.user_version,
+                current_version: crate::store::migrations::LATEST_SCHEMA_VERSION,
+            });
         }
 
         Self::open_verified(path)
@@ -1414,11 +1425,20 @@ impl Database {
 
     fn open_verified(path: &std::path::Path) -> Result<Self, crate::error::AppError> {
         let connection = Self::open_read_write_connection(path)?;
-        if !Self::connection_identity(&connection)?.is_current_bettr() {
+        let identity = Self::connection_identity(&connection)?;
+        if !identity.is_bettr_application() {
             return Err(crate::error::AppError::DatabaseNotInitialized);
         }
+        if !crate::store::migrations::is_supported_version(identity.user_version) {
+            return Err(crate::error::AppError::UnsupportedDatabaseSchemaVersion {
+                found_version: identity.user_version,
+                current_version: crate::store::migrations::LATEST_SCHEMA_VERSION,
+            });
+        }
 
-        Self::configure_connection(connection)
+        let mut database = Self::configure_connection(connection)?;
+        database.apply_pending_migrations(identity.user_version)?;
+        Ok(database)
     }
 
     fn open_read_write(path: &std::path::Path) -> Result<Self, crate::error::AppError> {
@@ -1451,7 +1471,7 @@ impl Database {
     }
 
     fn is_initialized_database(path: &std::path::Path) -> Result<bool, crate::error::AppError> {
-        Ok(read_sqlite_header_identity(path)?.is_current_bettr())
+        Ok(read_sqlite_header_identity(path)?.is_supported_bettr())
     }
 
     fn connection_identity(
@@ -1484,6 +1504,25 @@ impl Database {
         transaction
             .execute_batch(include_str!("schema.sql"))
             .map_err(crate::error::AppError::from)?;
+        let applied_at = chrono::Utc::now().to_rfc3339();
+        for (version, name) in [
+            (
+                crate::store::migrations::BASE_SCHEMA_VERSION,
+                "phase1_baseline",
+            ),
+            (
+                crate::store::migrations::LATEST_SCHEMA_VERSION,
+                "schema_migrations",
+            ),
+        ] {
+            transaction
+                .execute(
+                    "INSERT INTO schema_migrations (version, name, applied_at)
+                     VALUES (?1, ?2, ?3)",
+                    rusqlite::params![version, name, &applied_at],
+                )
+                .map_err(crate::error::AppError::from)?;
+        }
         Self::insert_audit_event(
             &transaction,
             AuditInsert {
@@ -1499,6 +1538,59 @@ impl Database {
                 metadata_json: "{}",
             },
         )?;
+        transaction.commit().map_err(crate::error::AppError::from)
+    }
+
+    fn apply_pending_migrations(
+        &mut self,
+        current_version: u32,
+    ) -> Result<(), crate::error::AppError> {
+        if current_version >= crate::store::migrations::LATEST_SCHEMA_VERSION {
+            return Ok(());
+        }
+
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::AppError::from)?;
+        let applied = crate::store::migrations::apply_pending(
+            &transaction,
+            current_version,
+            crate::store::migrations::migrations(),
+        )
+        .map_err(crate::error::AppError::from)?;
+        let context = crate::domain::ExecutionContext {
+            kind: crate::domain::InitiatorKind::System,
+            agent: None,
+            session_id: None,
+            operator: None,
+        };
+        let started_at = chrono::Utc::now();
+        let mut from_version = current_version;
+        for migration in applied {
+            let metadata_json = serde_json::json!({
+                "from_version": from_version,
+                "to_version": migration.version,
+                "migration": migration.name,
+            })
+            .to_string();
+            Self::insert_audit_event(
+                &transaction,
+                AuditInsert {
+                    operation: "schema_migrate",
+                    success: true,
+                    context: &context,
+                    target: None,
+                    project: None,
+                    revision: None,
+                    started_at,
+                    exit_code: 0,
+                    changed_fields: &[],
+                    metadata_json: &metadata_json,
+                },
+            )?;
+            from_version = migration.version;
+        }
         transaction.commit().map_err(crate::error::AppError::from)
     }
 

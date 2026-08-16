@@ -34,10 +34,22 @@ pub fn write_error(mode: OutputMode, error: &crate::error::AppError) {
                     "message": error.to_string(),
                 }
             });
-            if let crate::error::AppError::RevisionConflict { current_revision } = error {
-                error_value["error"]["details"] = serde_json::json!({
-                    "current_revision": current_revision,
-                });
+            match error {
+                crate::error::AppError::RevisionConflict { current_revision } => {
+                    error_value["error"]["details"] = serde_json::json!({
+                        "current_revision": current_revision,
+                    });
+                }
+                crate::error::AppError::UnsupportedDatabaseSchemaVersion {
+                    found_version,
+                    current_version,
+                } => {
+                    error_value["error"]["details"] = serde_json::json!({
+                        "found_version": found_version,
+                        "current_version": current_version,
+                    });
+                }
+                _ => {}
             }
             eprintln!("{error_value}");
         }

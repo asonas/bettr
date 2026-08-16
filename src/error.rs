@@ -15,12 +15,18 @@ pub enum AppError {
     NotFound(String),
     Conflict(String),
     InvalidTransition(String),
-    RevisionConflict { current_revision: i64 },
+    RevisionConflict {
+        current_revision: i64,
+    },
     ProjectNameConflict,
     DatabaseBusy(String),
     Internal(String),
     DatabaseAlreadyInitialized,
     DatabaseNotInitialized,
+    UnsupportedDatabaseSchemaVersion {
+        found_version: u32,
+        current_version: u32,
+    },
 }
 
 impl AppError {
@@ -36,6 +42,7 @@ impl AppError {
             Self::Internal(_) => ExitCode::Internal,
             Self::DatabaseAlreadyInitialized => ExitCode::InvalidInput,
             Self::DatabaseNotInitialized => ExitCode::NotFound,
+            Self::UnsupportedDatabaseSchemaVersion { .. } => ExitCode::InvalidInput,
         }
     }
 
@@ -51,6 +58,7 @@ impl AppError {
             Self::Internal(_) => "internal_error",
             Self::DatabaseAlreadyInitialized => "database_already_initialized",
             Self::DatabaseNotInitialized => "database_not_initialized",
+            Self::UnsupportedDatabaseSchemaVersion { .. } => "unsupported_database_schema_version",
         }
     }
 }
@@ -73,6 +81,13 @@ impl std::fmt::Display for AppError {
                 formatter.write_str("database is already initialized")
             }
             Self::DatabaseNotInitialized => formatter.write_str("database is not initialized"),
+            Self::UnsupportedDatabaseSchemaVersion {
+                found_version,
+                current_version,
+            } => write!(
+                formatter,
+                "database schema version {found_version} is unsupported; current version is {current_version}"
+            ),
         }
     }
 }
@@ -139,5 +154,20 @@ mod tests {
         assert!(matches!(error, super::AppError::Internal(_)));
         assert!(!error.to_string().contains("secret database detail"));
         assert!(error.to_string().contains("SQLite error code 11"));
+    }
+
+    #[test]
+    fn unsupported_schema_version_has_a_stable_input_error_contract() {
+        let error = super::AppError::UnsupportedDatabaseSchemaVersion {
+            found_version: 99,
+            current_version: 2,
+        };
+
+        assert_eq!(error.exit_code() as u8, 2);
+        assert_eq!(error.code(), "unsupported_database_schema_version");
+        assert_eq!(
+            error.to_string(),
+            "database schema version 99 is unsupported; current version is 2"
+        );
     }
 }
