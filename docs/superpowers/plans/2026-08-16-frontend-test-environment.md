@@ -29,7 +29,7 @@
 - Test: `tests/frontend/smoke.test.js`
 
 **Interfaces:**
-- `npm test` runs `vitest run`.
+- `npm test` runs the Vitest suite and the Node state projection tests.
 - `npm run test:frontend:watch` runs Vitest watch mode.
 - Vitest uses jsdom and loads `tests/frontend/setup.js` before tests.
 

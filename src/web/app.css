@@ -7,9 +7,10 @@
   --line: #e4e4df;
   --line-strong: #d1d1ca;
   --ink: #1e1e1b;
-  --ink-muted: #75756f;
+  --ink-muted: #6b6b64;
   --ink-faint: #a0a099;
   --accent: #5367e8;
+  --accent-strong: #465bd6;
   --accent-soft: #e9ecff;
   --signal: #e29c35;
   --danger: #d65353;
@@ -34,6 +35,7 @@
   --ink-muted: #9c9d95;
   --ink-faint: #6f706a;
   --accent: #8d9aff;
+  --accent-strong: #b9c0ff;
   --accent-soft: #272c54;
   --signal: #e8a94d;
   --danger: #e16b6b;
@@ -195,7 +197,7 @@ h1 { margin: 0; font-size: clamp(26px, 3vw, 36px); font-weight: 720; letter-spac
   .project-nav { margin-inline: 0; }
   .project-nav-list { max-height: 34vh; }
   .project-nav-link { justify-content: center; padding: 7px; }
-  .project-nav-dot { width: 28px; height: 28px; background: var(--accent-soft); border-radius: 8px; color: var(--accent); font-size: 10px; font-weight: 750; letter-spacing: -.03em; }
+  .project-nav-dot { width: 28px; height: 28px; background: var(--accent-soft); border-radius: 8px; color: var(--accent-strong); font-size: 10px; font-weight: 750; letter-spacing: -.03em; }
   .connection-state { justify-content: center; margin-inline: 0; }
   .workspace { width: calc(100% - var(--sidebar-width)); margin-left: var(--sidebar-width); }
   .topbar { padding-inline: 18px; }

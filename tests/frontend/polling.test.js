@@ -5,6 +5,22 @@ import { createWebController } from "../../src/web/app.js";
 import { issue, jsonResponse, mountShell, statusWith } from "./support.js";
 
 describe("polling redraws", () => {
+  it("does not start a second status request while one is in flight", async () => {
+    mountShell();
+    let resolveStatus;
+    const pendingStatus = new Promise((resolve) => { resolveStatus = resolve; });
+    const fetch = vi.fn((path) => path === "/api/status" ? pendingStatus : Promise.resolve(jsonResponse([])));
+    const controller = createWebController({ fetch });
+
+    const firstPoll = controller.pollStatus();
+    const secondPoll = controller.pollStatus();
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    resolveStatus(jsonResponse(statusWith({ active: [issue()] })));
+    await firstPoll;
+    await secondPoll;
+  });
+
   it("restores focus to a Kanban card after a polling update", async () => {
     mountShell();
     const statusResponses = [

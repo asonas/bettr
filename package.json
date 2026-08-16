@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run",
+    "test": "vitest run && node --test tests/web_state.test.mjs",
     "test:frontend": "vitest run",
     "test:frontend:watch": "vitest"
   },

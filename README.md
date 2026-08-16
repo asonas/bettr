@@ -92,8 +92,8 @@ npm test
 ```
 
 Rust tests cover the loopback HTTP server, embedded asset delivery, and JSON
-API contracts; the npm suite covers DOM rendering, polling, navigation, and
-focus behavior.
+API contracts; the npm suite covers DOM rendering, polling, navigation, focus
+behavior, and the state projection contract.
 
 Use the revision returned by the previous write. A stale revision fails with exit code 4 instead of overwriting another process's update.
 

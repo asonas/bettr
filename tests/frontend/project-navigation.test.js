@@ -5,6 +5,22 @@ import { createWebController } from "../../src/web/app.js";
 import { jsonResponse, mountShell } from "./support.js";
 
 describe("project navigation", () => {
+  it("does not overlap project list requests", async () => {
+    mountShell();
+    let resolveProjects;
+    const pendingProjects = new Promise((resolve) => { resolveProjects = resolve; });
+    const fetch = vi.fn(() => pendingProjects);
+    const controller = createWebController({ fetch });
+
+    const firstLoad = controller.loadProjectNavigation();
+    const secondLoad = controller.loadProjectNavigation();
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    resolveProjects(jsonResponse([{ name: "bettr", archived: false }]));
+    await firstLoad;
+    await secondLoad;
+  });
+
   it("recovers when a refresh fails after the initial project list loaded", async () => {
     mountShell();
     const projects = [
