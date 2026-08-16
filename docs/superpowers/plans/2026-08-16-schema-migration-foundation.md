@@ -33,7 +33,7 @@
 **Interfaces:**
 - Produces: テストが参照する`crate::store::migrations::Migration`、`apply_pending`の期待インターフェースと、version 2初期化・version 1移行・未知version拒否の受け入れ条件。
 
-- [ ] **Step 1: Migration実行器のrollbackテストを書く**
+- [x] **Step 1: Migration実行器のrollbackテストを書く**
 
 `src/store/migrations.rs`に、まだ実装されていない次のAPIを参照するテストを追加する。Migration関数はテーブルを作成してからSQLiteエラーを返し、呼び出し側がトランザクションをdropした後に作成物と`user_version`が残らないことを検証する。
 
@@ -85,7 +85,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 初期化後のschema versionと履歴を検証するテストへ変更する**
+- [x] **Step 2: 初期化後のschema versionと履歴を検証するテストへ変更する**
 
 `tests/cli_init.rs`の`init_creates_a_version_one_database_once`を`init_creates_a_version_two_database_with_migration_history`へ変更し、`user_version`が2であることと、次の2行が`schema_migrations`に存在することを追加で検証する。
 
@@ -103,15 +103,15 @@ assert_eq!(
 );
 ```
 
-- [ ] **Step 3: schema version 1から2への移行テストを書く**
+- [x] **Step 3: schema version 1から2への移行テストを書く**
 
 初期化とプロジェクト作成後、テスト用接続で`DROP TABLE IF EXISTS schema_migrations; PRAGMA user_version = 1;`を実行してPhase 1 DBを再現する。`project list --json`後にversion 2、履歴2行、既存project、`schema_migrate`監査1件を検証する。Migration metadataはJSONとして読み、`from_version: 1`、`to_version: 2`、`migration: "schema_migrations"`だけを確認する。
 
-- [ ] **Step 4: 未知version拒否のテストを書く**
+- [x] **Step 4: 未知version拒否のテストを書く**
 
 初期化済みbettr DBの`PRAGMA user_version`を99へ変更してbytesを保存し、`project list --json`が終了コード2、エラーコード`unsupported_database_schema_version`、detailsの`found_version: 99`と`current_version: 2`を返すことを確認する。元bytesが不変で、`-wal`、`-shm`、`-journal`が新規作成されないことも確認する。
 
-- [ ] **Step 5: 失敗テストを実行する**
+- [x] **Step 5: 失敗テストを実行する**
 
 Run: `mise exec -- cargo test --test cli_init --test phase1_workflow`
 
@@ -129,7 +129,7 @@ Expected: 新しいversion 2・履歴・移行・未知versionのアサーショ
 - Consumes: Task 1の`Migration`/`apply_pending`テスト。
 - Produces: `pub(crate) const LATEST_SCHEMA_VERSION: u32 = 2`、`pub(crate) const BASE_SCHEMA_VERSION: u32 = 1`、`pub(crate) fn is_supported_version(version: u32) -> bool`、`pub(crate) fn apply_pending(transaction: &rusqlite::Transaction<'_>, migrations: &[Migration]) -> Result<Vec<Migration>, rusqlite::Error>`。
 
-- [ ] **Step 1: Migration型と実行器の最小実装を書く**
+- [x] **Step 1: Migration型と実行器の最小実装を書く**
 
 `Migration`は`version: u32`、`name: &'static str`、`apply: fn(&rusqlite::Transaction<'_>) -> Result<(), rusqlite::Error>`を持つ`Copy`型にする。`apply_pending`はTransaction内で`PRAGMA user_version`を読み、ロック待機後の最新versionより大きいMigrationだけを登録順に適用する。成功ごとに履歴行と`PRAGMA user_version`を同じTransactionへ書き込む。失敗時はエラーを返し、Transactionの所有者がdropしてrollbackできるように内部でcommitしない。
 
@@ -169,11 +169,11 @@ pub(crate) fn apply_pending(
 }
 ```
 
-- [ ] **Step 2: version検証を実装する**
+- [x] **Step 2: version検証を実装する**
 
 version 1以上かつversion 2以下だけをsupportedとする`is_supported_version`を追加する。未知versionを`AppError`へ変換する処理は、JSONエラー契約と同時にTask 3で実装する。
 
-- [ ] **Step 3: version 2 Migrationを実装する**
+- [x] **Step 3: version 2 Migrationを実装する**
 
 固定Migration配列にversion 2、name `schema_migrations`を登録する。Migration関数は次のDDLを実行し、version 1のbaseline行を`INSERT OR IGNORE`で追加する。
 
@@ -187,11 +187,11 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 実行器がversion 2行を追加するため、Migration関数自身はversion 2の履歴行を追加しない。
 
-- [ ] **Step 4: 初期schemaをversion 2へ更新する**
+- [x] **Step 4: 初期schemaをversion 2へ更新する**
 
 `schema.sql`へ`schema_migrations`テーブルを追加し、`PRAGMA user_version = 2`へ変更する。初期化トランザクション内でRust側からversion 1の`phase1_baseline`行とversion 2の`schema_migrations`行を現在UTC時刻付きで追加するため、SQLファイルには時刻を固定した履歴データを書かない。
 
-- [ ] **Step 5: Migration実行器の単体テストをgreenにする**
+- [x] **Step 5: Migration実行器の単体テストをgreenにする**
 
 Run: `mise exec -- cargo test store::migrations`
 
@@ -210,7 +210,7 @@ Expected: rollbackテストがPASSし、失敗したMigrationが作成したテ�
 - Consumes: Task 2のversion検証、固定Migration配列、`apply_pending`。
 - Produces: `AppError::UnsupportedDatabaseSchemaVersion { found_version: u32, current_version: u32 }`、schema version 1/2を受け入れる`Database::open`、Migration成功時の`schema_migrate`監査イベント。
 
-- [ ] **Step 1: 未知versionエラーの失敗テストをgreenにする**
+- [x] **Step 1: 未知versionエラーの失敗テストをgreenにする**
 
 `AppError`へ`UnsupportedDatabaseSchemaVersion`を追加し、終了コード2、コード`unsupported_database_schema_version`、表示文`database schema version {found_version} is unsupported; current version is {current_version}`を実装する。`output::write_error`では次のdetailsを追加する。
 
@@ -223,11 +223,11 @@ Expected: rollbackテストがPASSし、失敗したMigrationが作成したテ�
 
 `src/error.rs`の既存エラーテストへ、終了コード・code・Displayの組み合わせを検証するテストを追加してから実装する。
 
-- [ ] **Step 2: header preflightのversion判定を実装する**
+- [x] **Step 2: header preflightのversion判定を実装する**
 
 `Database::open`は、まずheaderからapplication IDを検査し、bettr application IDの場合だけ`migrations::is_supported_version`を呼ぶ。application ID不一致は`database_not_initialized`、version 0・3以上・その他未知versionは`unsupported_database_schema_version`とする。未知versionではread-write接続、WAL設定、監査書き込みを実行しない。
 
-- [ ] **Step 3: 同一接続の再検査とMigration実行を実装する**
+- [x] **Step 3: 同一接続の再検査とMigration実行を実装する**
 
 `open_verified`で接続後のidentityを再検査し、既知versionであることを確認してから既存の接続設定を適用する。versionが1の場合は`BEGIN IMMEDIATE`で`apply_pending`を呼び、実行器がロック取得後の`user_version`を再読込する。返されたMigrationごとに`schema_migrate`監査を同一Transactionへ追加し、最後にcommitする。監査contextはsystem、target/project/revisionなし、changed fields空配列、metadataは次の形に固定する。
 
@@ -241,11 +241,11 @@ Expected: rollbackテストがPASSし、失敗したMigrationが作成したテ�
 
 Migration関数、履歴追加、`user_version`更新、監査挿入、commitのいずれかが失敗した場合はTransactionをdropして全変更をrollbackする。
 
-- [ ] **Step 4: 初期化時に履歴を追加する**
+- [x] **Step 4: 初期化時に履歴を追加する**
 
 `initialize_schema`で`schema.sql`適用直後、`init`成功監査を追加する前に、version 1・2の`schema_migrations`履歴行を同じ初期化Transactionへ追加する。既存の`init`監査は1件のままにし、初期化時に`schema_migrate`を別途記録しない。
 
-- [ ] **Step 5: 初期化・version 1移行・未知versionテストを実行する**
+- [x] **Step 5: 初期化・version 1移行・未知versionテストを実行する**
 
 Run: `mise exec -- cargo test --test cli_init --test phase1_workflow`
 
@@ -262,7 +262,7 @@ Expected: 新規DBがversion 2と履歴2行になり、version 1 fixtureが既�
 - Consumes: Task 3の`Database::open` Migration処理と`schema_migrate`監査。
 - Produces: 同時起動で履歴が一度だけ追加される回帰テストと、未知versionエラーの利用者向け契約。
 
-- [ ] **Step 1: version 1 fixtureを作るテストヘルパーを書く**
+- [x] **Step 1: version 1 fixtureを作るテストヘルパーを書く**
 
 `tests/sqlite_concurrency.rs`へ次のヘルパーを追加し、初期化済みDBから`schema_migrations`を削除して`user_version`を1へ戻す。`DROP TABLE IF EXISTS`を使い、実装前のversion 1 schemaでもhelper自体が失敗しないようにする。
 
@@ -278,21 +278,21 @@ fn downgrade_to_schema_version_one(app: &crate::support::TestApp) {
 }
 ```
 
-- [ ] **Step 2: stale versionと同時MigrationのテストをREDで追加する**
+- [x] **Step 2: stale versionと同時MigrationのテストをREDで追加する**
 
 Migration実行器のunit testでは、1つ目のTransactionをcommitした後、古いversion 1を渡して2つ目のTransactionを開始してもno-opになることを検証する。さらに`GatedBettr`を2つ起動し、両方に`project list --json`を渡して同じversion 1 fixtureを同時に開かせる。両プロセス終了後にversion 2、履歴version 1・2の各1行、`schema_migrate`監査1件、`PRAGMA integrity_check = 'ok'`、`PRAGMA foreign_key_check`空を検証する。
 
-- [ ] **Step 3: 並行テストを実行して失敗を確認する**
+- [x] **Step 3: 並行テストを実行して失敗を確認する**
 
 Run: `mise exec -- cargo test --test sqlite_concurrency concurrent_database_opens_apply_schema_migration_once -- --nocapture`
 
 Expected: 実装前は`schema_migrations`が存在しないためFAILする。
 
-- [ ] **Step 4: JSON契約を更新する**
+- [x] **Step 4: JSON契約を更新する**
 
 `docs/json-contract.md`のexit code表へ`unsupported_database_schema_version`を追加し、既知の移行元versionは自動更新され、未知versionはexit 2で拒否されること、JSON responseの`schema_version: 1`とは異なることを記述する。READMEの安全境界も「現在versionと互換性のある既知versionを確認する」表現へ更新する。
 
-- [ ] **Step 5: 対象テストをgreenにする**
+- [x] **Step 5: 対象テストをgreenにする**
 
 Run: `mise exec -- cargo test --test sqlite_concurrency --test cli_init --test phase1_workflow`
 
@@ -308,7 +308,7 @@ Expected: 移行、rollback、未知version、監査、並行アクセスの対�
 - Consumes: Task 1〜4の実装とテスト。
 - Produces: clippy・全テスト・diff検証の証拠、Issue #2の完了記録。
 
-- [ ] **Step 1: formatとclippyを実行する**
+- [x] **Step 1: formatとclippyを実行する**
 
 Run: `mise exec -- cargo fmt -- --check`
 
@@ -316,13 +316,13 @@ Run: `mise exec -- cargo clippy --all-targets --all-features -- -D warnings`
 
 Expected: format差分なし、clippy警告なし。
 
-- [ ] **Step 2: 全テストを実行する**
+- [x] **Step 2: 全テストを実行する**
 
 Run: `mise exec -- cargo test`
 
 Expected: 全unit test・integration testがexit code 0で終了し、失敗0件。
 
-- [ ] **Step 3: 変更範囲と要件対応を確認する**
+- [x] **Step 3: 変更範囲と要件対応を確認する**
 
 Run: `git diff --check`
 
@@ -338,10 +338,10 @@ Issue #2の各完了条件について、対応するテストを次のように
 | 同時起動で二重適用しない | `sqlite_concurrency`の同時Migrationテスト |
 | JSON契約・監査イベント | `error`テスト、`cli_init`の`schema_migrate`監査検証 |
 
-- [ ] **Step 4: 実装結果をbettrへコメントする**
+- [x] **Step 4: 実装結果をbettrへコメントする**
 
 コメントには変更概要、設計文書・実装計画の保存先、検証コマンドの結果、専用ブランチ名を記録する。生のコマンドラインやIssue本文をコメントへ複製しない。
 
-- [ ] **Step 5: 検証後にIssueをcompleteへ更新する**
+- [x] **Step 5: 検証後にIssueをcompleteへ更新する**
 
 `bettr issue show 2`で最新revisionを取得し、検証結果を`summary`と`verification`へ記録して`complete`へ遷移する。revision conflictが出た場合は現在Issueを再読込し、既存コメントを上書きせず新しいコメントとして状況を記録する。
