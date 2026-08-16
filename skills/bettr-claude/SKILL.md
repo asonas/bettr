@@ -57,6 +57,8 @@ BETTR_OPERATOR=reviewer bettr decision resolve <request-uuid> \
   --answer "Use the safer behavior" --next-state todo --json
 ```
 
+When resolving directly to `blocked`, provide `--reason` and `--wait-kind`; when resolving to `done`, provide `--summary` and `--verification`; when resolving to `cancelled`, provide `--reason`. These resolutions emit the matching Issue transition event. Use `todo` when the agent should claim the Issue again.
+
 Open requests appear in `status` as `attention` and block completion. Do not bypass them by writing state directly.
 
 Resolve decisions to `todo`, `blocked`, `done`, or `cancelled`; do not select `in_progress`, because active work must be re-entered through an agent claim and lease.

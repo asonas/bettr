@@ -832,7 +832,7 @@ impl Database {
         &mut self,
         request_id: uuid::Uuid,
         answer: &str,
-        next_state: crate::domain::IssueState,
+        resolution_input: crate::domain::DecisionResolutionInput,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::DecisionRequest, crate::error::AppError> {
         let transaction = self
@@ -878,12 +878,13 @@ impl Database {
                 "decision requests must be resolved by a human".to_owned(),
             ));
         }
-        if next_state == crate::domain::IssueState::InProgress {
+        if resolution_input.target_state() == crate::domain::IssueState::InProgress {
             return Err(crate::error::AppError::Conflict(
                 "decision resolution cannot enter in_progress without a lease; use todo and claim the Issue"
                     .to_owned(),
             ));
         }
+        let resolution = resolution_input.into_resolution()?;
         let (issue_id, project_id, issue_number) = transaction
             .query_row(
                 "SELECT request.issue_id, issue.project_id, issue.number
@@ -904,7 +905,7 @@ impl Database {
             .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
         let project_id = uuid::Uuid::parse_str(&project_id)
             .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
-        if next_state == crate::domain::IssueState::Done {
+        if resolution.target_state() == crate::domain::IssueState::Done {
             let another_open_request = transaction
                 .query_row(
                     "SELECT EXISTS(
@@ -930,7 +931,7 @@ impl Database {
                  SET state = ?1, revision = revision + 1, updated_at = ?2
                  WHERE id = ?3 AND revision = ?4",
                 rusqlite::params![
-                    next_state.as_str(),
+                    resolution.target_state().as_str(),
                     now.to_rfc3339(),
                     issue.id.to_string(),
                     issue.revision,
@@ -954,22 +955,20 @@ impl Database {
             )
             .map_err(crate::error::AppError::from)?;
         let mut updated_issue = issue.clone();
-        updated_issue.state = next_state;
+        updated_issue.state = resolution.target_state();
         updated_issue.revision += 1;
         updated_issue.updated_at = now;
-        let event_metadata = Self::event_metadata(
-            serde_json::json!({
-                "request_id": request_id,
-                "from_state": issue.state,
-                "to_state": next_state,
-                "revision": updated_issue.revision,
-            }),
-            context,
-        )?;
+        let mut resolution_metadata =
+            resolution.event_metadata(issue.state, updated_issue.revision);
+        resolution_metadata
+            .as_object_mut()
+            .expect("decision resolution metadata is an object")
+            .insert("request_id".to_owned(), request_id.to_string().into());
+        let event_metadata = Self::event_metadata(resolution_metadata, context)?;
         Self::insert_domain_event(
             &transaction,
             &updated_issue,
-            "decision_resolved",
+            resolution.event_type(),
             &event_metadata,
             now,
         )?;
@@ -991,7 +990,7 @@ impl Database {
                 revision: Some(updated_issue.revision),
                 started_at: now,
                 exit_code: 0,
-                changed_fields: &["decision", "state"],
+                changed_fields: resolution.changed_fields(),
                 metadata_json: &audit_metadata,
             },
         )?;
@@ -2386,7 +2385,14 @@ impl Database {
             "issue_heartbeat" => &[],
             "issue_takeover" => &["state", "assignee_kind", "assignee_name"],
             "decision_request" => &["state", "decision_request"],
-            "decision_resolve" => &["decision", "state"],
+            "decision_resolve" => &[
+                "decision",
+                "state",
+                "reason",
+                "wait_kind",
+                "summary",
+                "verification",
+            ],
             "issue_start" | "issue_resume" => &["state"],
             "issue_block" => &["state", "reason", "wait_kind"],
             "issue_complete" => &["state", "summary", "verification"],

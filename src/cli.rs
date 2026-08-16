@@ -345,6 +345,18 @@ pub struct DecisionResolveCommand {
 
     #[arg(long)]
     pub next_state: crate::domain::IssueState,
+
+    #[arg(long)]
+    pub summary: Option<String>,
+
+    #[arg(long)]
+    pub verification: Option<String>,
+
+    #[arg(long)]
+    pub reason: Option<String>,
+
+    #[arg(long, value_enum)]
+    pub wait_kind: Option<crate::domain::WaitKind>,
 }
 
 #[derive(clap::Args, Debug)]

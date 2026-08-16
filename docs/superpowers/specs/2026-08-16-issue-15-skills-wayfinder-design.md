@@ -42,7 +42,7 @@ bettr issue claim [NUMBER]
 bettr issue heartbeat NUMBER
 bettr issue takeover NUMBER --reason REASON
 bettr decision request NUMBER --question QUESTION --background BACKGROUND
-bettr decision resolve REQUEST_ID --answer ANSWER --next-state STATE
+bettr decision resolve REQUEST_ID --answer ANSWER --next-state STATE [--reason REASON] [--wait-kind WAIT_KIND] [--summary SUMMARY] [--verification VERIFICATION]
 bettr event list --after CURSOR [--limit LIMIT] [--include-issue]
 bettr capabilities --json
 ```
@@ -51,7 +51,7 @@ Relation arguments use `PROJECT#NUMBER`; an unqualified number uses the global `
 
 Lease defaults are fixed at 15 minutes. Heartbeat extends the same lease and is valid only for the current owner. An expired lease is displayed as stale but never changes Issue state automatically. Takeover requires a nonblank reason, restores `in_progress`, and changes the owner in one transaction. Transitions to a non-`in_progress` state release any existing lease in the same transaction.
 
-Creating a decision request moves the Issue to `blocked` with human wait metadata in the same transaction. Resolving a request records the answer and human context and applies an explicit next state, except `in_progress`, which requires an agent claim and lease; resolve to `todo` before reclaiming the Issue. An Issue with any unresolved request cannot transition to `done`; the resolver cannot be the requesting agent session.
+Creating a decision request moves the Issue to `blocked` with human wait metadata in the same transaction. Resolving a request records the answer and human context and applies an explicit next state, except `in_progress`, which requires an agent claim and lease; resolve to `todo` before reclaiming the Issue. Resolving to `blocked` requires a reason and wait kind, resolving to `done` requires a summary and verification, and resolving to `cancelled` requires a reason; each uses the corresponding transition event. An Issue with any unresolved request cannot transition to `done`; the resolver cannot be the requesting agent session.
 
 Event cursors are exclusive integer sequences over successful committed data changes. Reads, failures, and heartbeat renewals are omitted. The response returns `next_cursor`, `has_more`, and safe event objects containing event type, target IDs, changed fields, revision, timestamp, and optional post-change Issue data. A single read transaction supplies the snapshot.
 

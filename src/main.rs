@@ -392,10 +392,17 @@ fn run(
                 }
                 crate::cli::DecisionSubcommand::Resolve(command) => {
                     let context = crate::domain::ExecutionContext::resolve()?;
+                    let resolution = crate::domain::DecisionResolutionInput::new(
+                        command.next_state,
+                        command.summary,
+                        command.verification,
+                        command.reason,
+                        command.wait_kind,
+                    );
                     let request = app.resolve_decision(
                         &command.request_id,
                         &command.answer,
-                        command.next_state,
+                        resolution,
                         &context,
                     )?;
                     match output_mode {

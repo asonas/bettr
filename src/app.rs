@@ -856,7 +856,7 @@ impl App {
         &mut self,
         request_id: &str,
         answer: &str,
-        next_state: crate::domain::IssueState,
+        resolution: crate::domain::DecisionResolutionInput,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::DecisionRequest, crate::error::AppError> {
         let started_at = chrono::Utc::now();
@@ -868,7 +868,7 @@ impl App {
             })?;
             crate::domain::validate_decision_text("decision answer", answer)?;
             self.database
-                .resolve_decision(request_id, answer, next_state, context)
+                .resolve_decision(request_id, answer, resolution, context)
         })();
         match result {
             Ok(request) => Ok(request),

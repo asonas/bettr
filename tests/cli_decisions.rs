@@ -122,6 +122,10 @@ fn decision_requests_block_issue_and_resolve_with_human_context() {
             "Use the streaming parser.",
             "--next-state",
             "blocked",
+            "--reason",
+            "Waiting for the rollout window.",
+            "--wait-kind",
+            "human",
             "--json",
         ])
         .output()
@@ -305,6 +309,176 @@ fn decision_resolution_rejects_in_progress_without_a_lease() {
         .assert()
         .code(4)
         .stderr(predicates::str::contains("lease"));
+}
+
+#[test]
+fn decision_resolution_requires_state_specific_metadata_and_emits_transition_event() {
+    let app = initialized_app();
+
+    let request = app
+        .command()
+        .env("BETTR_AGENT", "codex")
+        .env("BETTR_SESSION_ID", "session-a")
+        .args([
+            "decision",
+            "request",
+            "1",
+            "--project",
+            "bettr",
+            "--question",
+            "Which parser should we use?",
+            "--background",
+            "The current parser cannot handle this input.",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let request = json_data(&request);
+    let request_id = request["id"].as_str().unwrap();
+
+    app.command()
+        .env("BETTR_OPERATOR", "reviewer")
+        .args([
+            "decision",
+            "resolve",
+            request_id,
+            "--answer",
+            "Use the streaming parser.",
+            "--next-state",
+            "done",
+            "--json",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicates::str::contains("summary"));
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT state FROM issues WHERE number = 1", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap(),
+        "blocked"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT status FROM decision_requests WHERE id = ?1",
+                [request_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "open"
+    );
+    drop(connection);
+
+    app.command()
+        .env("BETTR_OPERATOR", "reviewer")
+        .args([
+            "decision",
+            "resolve",
+            request_id,
+            "--answer",
+            "Use the streaming parser.",
+            "--next-state",
+            "done",
+            "--summary",
+            "Selected the streaming parser.",
+            "--verification",
+            "Reviewed the parser integration tests.",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    let (event_type, metadata): (String, String) = connection
+        .query_row(
+            "SELECT event_type, metadata_json FROM domain_events ORDER BY sequence DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(event_type, "issue_completed");
+    let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+    assert_eq!(metadata["request_id"], request_id);
+    assert_eq!(metadata["summary"], "Selected the streaming parser.");
+    assert_eq!(
+        metadata["verification"],
+        "Reviewed the parser integration tests."
+    );
+}
+
+#[test]
+fn decision_resolution_requires_block_and_cancel_metadata() {
+    let app = initialized_app();
+
+    let request = app
+        .command()
+        .env("BETTR_AGENT", "codex")
+        .env("BETTR_SESSION_ID", "session-a")
+        .args([
+            "decision",
+            "request",
+            "1",
+            "--project",
+            "bettr",
+            "--question",
+            "Which parser should we use?",
+            "--background",
+            "The current parser cannot handle this input.",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let request = json_data(&request);
+    let request_id = request["id"].as_str().unwrap();
+
+    app.command()
+        .env("BETTR_OPERATOR", "reviewer")
+        .args([
+            "decision",
+            "resolve",
+            request_id,
+            "--answer",
+            "Keep the current parser.",
+            "--next-state",
+            "cancelled",
+            "--json",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicates::str::contains("reason"));
+
+    app.command()
+        .env("BETTR_OPERATOR", "reviewer")
+        .args([
+            "decision",
+            "resolve",
+            request_id,
+            "--answer",
+            "Keep the current parser.",
+            "--next-state",
+            "cancelled",
+            "--reason",
+            "The parser change is no longer needed.",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    let (event_type, metadata): (String, String) = connection
+        .query_row(
+            "SELECT event_type, metadata_json FROM domain_events ORDER BY sequence DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(event_type, "issue_cancelled");
+    let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+    assert_eq!(metadata["reason"], "The parser change is no longer needed.");
 }
 
 #[test]

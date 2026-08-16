@@ -49,6 +49,8 @@ request UUIDを保存し、同じagent/sessionで解決しようとしない。
 人間が次状態を明示して解決した後、`status --json`で`attention`から消えたことを確認して再開する。
 未解決requestがある間は完了操作を送らない。
 
+`next-state`に応じて遷移メタデータを渡す。`blocked`は`--reason`と`--wait-kind`、`done`は`--summary`と`--verification`、`cancelled`は`--reason`が必須である。作業を再開する場合は`todo`で解決し、agent claimをやり直す。
+
 ## 4. Exclusive event polling
 
 永続化したカーソルを`cursor`とし、最後に処理したsequenceの後だけを取得する。

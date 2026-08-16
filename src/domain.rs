@@ -288,6 +288,176 @@ impl Transition {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct DecisionResolution {
+    target_state: IssueState,
+    transition: Option<Transition>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DecisionResolutionInput {
+    target_state: IssueState,
+    summary: Option<String>,
+    verification: Option<String>,
+    reason: Option<String>,
+    wait_kind: Option<WaitKind>,
+}
+
+impl DecisionResolutionInput {
+    pub fn new(
+        target_state: IssueState,
+        summary: Option<String>,
+        verification: Option<String>,
+        reason: Option<String>,
+        wait_kind: Option<WaitKind>,
+    ) -> Self {
+        Self {
+            target_state,
+            summary,
+            verification,
+            reason,
+            wait_kind,
+        }
+    }
+
+    pub const fn target_state(&self) -> IssueState {
+        self.target_state
+    }
+
+    pub fn into_resolution(self) -> Result<DecisionResolution, DomainError> {
+        DecisionResolution::new(
+            self.target_state,
+            self.summary,
+            self.verification,
+            self.reason,
+            self.wait_kind,
+        )
+    }
+}
+
+impl DecisionResolution {
+    pub fn new(
+        target_state: IssueState,
+        summary: Option<String>,
+        verification: Option<String>,
+        reason: Option<String>,
+        wait_kind: Option<WaitKind>,
+    ) -> Result<Self, DomainError> {
+        let transition = match target_state {
+            IssueState::Todo => {
+                if summary.is_some()
+                    || verification.is_some()
+                    || reason.is_some()
+                    || wait_kind.is_some()
+                {
+                    return Err(DomainError::InvalidMetadata(
+                        "decision resolution to todo does not accept transition metadata"
+                            .to_owned(),
+                    ));
+                }
+                None
+            }
+            IssueState::Blocked => {
+                if summary.is_some() || verification.is_some() {
+                    return Err(DomainError::InvalidMetadata(
+                        "decision resolution to blocked does not accept summary or verification"
+                            .to_owned(),
+                    ));
+                }
+                let reason = reason.ok_or_else(|| {
+                    DomainError::InvalidMetadata(
+                        "decision resolution to blocked requires --reason".to_owned(),
+                    )
+                })?;
+                let wait_kind = wait_kind.ok_or_else(|| {
+                    DomainError::InvalidMetadata(
+                        "decision resolution to blocked requires --wait-kind".to_owned(),
+                    )
+                })?;
+                Some(Transition::block(reason, wait_kind)?)
+            }
+            IssueState::Done => {
+                if reason.is_some() || wait_kind.is_some() {
+                    return Err(DomainError::InvalidMetadata(
+                        "decision resolution to done does not accept reason or wait kind"
+                            .to_owned(),
+                    ));
+                }
+                let summary = summary.ok_or_else(|| {
+                    DomainError::InvalidMetadata(
+                        "decision resolution to done requires --summary".to_owned(),
+                    )
+                })?;
+                let verification = verification.ok_or_else(|| {
+                    DomainError::InvalidMetadata(
+                        "decision resolution to done requires --verification".to_owned(),
+                    )
+                })?;
+                Some(Transition::complete(summary, verification)?)
+            }
+            IssueState::Cancelled => {
+                if summary.is_some() || verification.is_some() || wait_kind.is_some() {
+                    return Err(DomainError::InvalidMetadata(
+                        "decision resolution to cancelled does not accept summary, verification, or wait kind"
+                            .to_owned(),
+                    ));
+                }
+                let reason = reason.ok_or_else(|| {
+                    DomainError::InvalidMetadata(
+                        "decision resolution to cancelled requires --reason".to_owned(),
+                    )
+                })?;
+                Some(Transition::cancel(reason)?)
+            }
+            IssueState::InProgress => {
+                return Err(DomainError::InvalidTransition {
+                    from: IssueState::Blocked,
+                    transition: "decision_resolve",
+                });
+            }
+        };
+        Ok(Self {
+            target_state,
+            transition,
+        })
+    }
+
+    pub const fn target_state(&self) -> IssueState {
+        self.target_state
+    }
+
+    pub const fn event_type(&self) -> &'static str {
+        match self.target_state {
+            IssueState::Todo => "decision_resolved",
+            IssueState::Blocked => "issue_blocked",
+            IssueState::Done => "issue_completed",
+            IssueState::Cancelled => "issue_cancelled",
+            IssueState::InProgress => "decision_resolved",
+        }
+    }
+
+    pub const fn changed_fields(&self) -> &'static [&'static str] {
+        match self.target_state {
+            IssueState::Todo => &["decision", "state"],
+            IssueState::Blocked => &["decision", "state", "reason", "wait_kind"],
+            IssueState::Done => &["decision", "state", "summary", "verification"],
+            IssueState::Cancelled => &["decision", "state", "reason"],
+            IssueState::InProgress => &["decision", "state"],
+        }
+    }
+
+    pub fn event_metadata(&self, from_state: IssueState, revision: i64) -> serde_json::Value {
+        match &self.transition {
+            Some(transition) => transition.event_metadata(from_state, self.target_state, revision),
+            None => serde_json::json!({
+                "from_state": from_state,
+                "to_state": self.target_state,
+                "revision": revision,
+            }),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DomainError {
     InvalidMetadata(String),

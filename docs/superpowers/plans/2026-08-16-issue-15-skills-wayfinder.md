@@ -194,7 +194,7 @@ Expected: exactly one concurrent claimant succeeds; stale leases remain `in_prog
 
 **Interfaces:**
 - Adds `decision request NUMBER --question QUESTION --background BACKGROUND`.
-- Adds `decision resolve REQUEST_ID --answer ANSWER --next-state STATE`.
+- Adds `decision resolve REQUEST_ID --answer ANSWER --next-state STATE`, with state-specific transition metadata: `--reason` and `--wait-kind` for `blocked`, `--summary` and `--verification` for `done`, and `--reason` for `cancelled`.
 - Adds serialized request objects and `attention_required` data to status/Issue responses.
 
 - [ ] **Step 1: Write request and resolution tests**
@@ -213,7 +213,7 @@ Validate nonblank question, background, and answer values; represent open/resolv
 
 - [ ] **Step 4: Implement atomic request creation and resolution**
 
-Create a request and block the Issue in one transaction. Resolve the request, record answer and human context, reject `done` while another request remains open, and append safe domain/audit events.
+Create a request and block the Issue in one transaction. Resolve the request, record answer and human context, reject `done` while another request remains open, validate state-specific transition metadata, and append the corresponding safe domain/audit events.
 
 - [ ] **Step 5: Add attention-required status projection**
 

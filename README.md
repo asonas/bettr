@@ -147,6 +147,8 @@ BETTR_OPERATOR=reviewer bettr decision resolve <request-uuid> \
   --answer "Use the safer behavior" --next-state todo --json
 ```
 
+直接`blocked`にする場合は`--reason`と`--wait-kind`、`done`にする場合は`--summary`と`--verification`、`cancelled`にする場合は`--reason`を指定する。これらは対応するIssue遷移イベントを記録する。
+
 wayfinder-style consumers can persist an exclusive event cursor:
 
 ```sh
