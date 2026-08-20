@@ -10,6 +10,9 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
+    #[arg(long, global = true, value_name = "KEY")]
+    pub idempotency_key: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }

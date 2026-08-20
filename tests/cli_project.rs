@@ -110,6 +110,121 @@ fn duplicate_project_name_returns_project_name_conflict() {
 }
 
 #[test]
+fn project_create_replays_the_same_result_for_an_idempotency_key() {
+    let app = crate::support::TestApp::new();
+    app.command().arg("init").assert().success();
+
+    let first = app
+        .command()
+        .args([
+            "project",
+            "create",
+            "bettr",
+            "--idempotency-key",
+            "project-create-1",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(first.status.success());
+
+    let second = app
+        .command()
+        .args([
+            "project",
+            "create",
+            "bettr",
+            "--idempotency-key",
+            "project-create-1",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(second.status.success());
+
+    let first: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    let second: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(first, second);
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM projects", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM domain_events WHERE event_type = 'project_created'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM audit_events WHERE operation = 'project_create' AND success = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn project_create_rejects_reusing_an_idempotency_key_for_a_different_payload() {
+    let app = crate::support::TestApp::new();
+    app.command().arg("init").assert().success();
+    app.command()
+        .args([
+            "project",
+            "create",
+            "bettr",
+            "--idempotency-key",
+            "project-create-1",
+        ])
+        .assert()
+        .success();
+
+    app.command()
+        .args([
+            "project",
+            "create",
+            "other",
+            "--idempotency-key",
+            "project-create-1",
+            "--json",
+        ])
+        .assert()
+        .code(4)
+        .stderr(predicates::str::contains("idempotency_conflict"));
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM projects", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM audit_events WHERE operation = 'project_create' AND success = 0",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
 fn project_list_is_ordered_by_name() {
     let app = crate::support::TestApp::new();
     app.command().arg("init").assert().success();

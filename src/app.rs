@@ -86,11 +86,48 @@ struct DirectoryConfig {
 
 pub struct App {
     database: crate::store::Database,
+    idempotency_key: Option<String>,
 }
 
 impl App {
     pub const fn new(database: crate::store::Database) -> Self {
-        Self { database }
+        Self {
+            database,
+            idempotency_key: None,
+        }
+    }
+
+    pub fn with_idempotency_key(
+        mut self,
+        key: Option<String>,
+    ) -> Result<Self, crate::error::AppError> {
+        if let Some(key) = &key {
+            crate::domain::validate_idempotency_key(key)?;
+        }
+        self.idempotency_key = key;
+        Ok(self)
+    }
+
+    fn idempotency_request(
+        &self,
+        operation: &str,
+        mut payload: serde_json::Value,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<Option<crate::store::IdempotencyRequest>, crate::error::AppError> {
+        let Some(key) = self.idempotency_key.as_deref() else {
+            return Ok(None);
+        };
+        let object = payload.as_object_mut().ok_or_else(|| {
+            crate::error::AppError::Internal(
+                "idempotency request payload must be a JSON object".to_owned(),
+            )
+        })?;
+        object.insert(
+            "context".to_owned(),
+            serde_json::to_value(context)
+                .map_err(|error| crate::error::AppError::Internal(error.to_string()))?,
+        );
+        crate::store::IdempotencyRequest::new(key, operation, payload).map(Some)
     }
 
     pub fn audited_cli_failure(
@@ -282,9 +319,15 @@ impl App {
     ) -> Result<crate::domain::Project, crate::error::AppError> {
         let started_at = chrono::Utc::now();
         let subject = self.database.project_audit_subject(name);
-        match crate::domain::validate_project_name(name)
-            .and_then(|()| self.database.create_project(name, context))
-        {
+        let idempotency = self.idempotency_request(
+            "project_create",
+            serde_json::json!({ "name": name }),
+            context,
+        )?;
+        match crate::domain::validate_project_name(name).and_then(|()| {
+            self.database
+                .create_project_with_idempotency(name, context, idempotency.as_ref())
+        }) {
             Ok(project) => Ok(project),
             Err(error) => {
                 if let Err(audit_error) = self.database.record_failed_operation(

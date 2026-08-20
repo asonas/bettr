@@ -53,6 +53,7 @@ fn run(
         crate::app::App::resolved_context(cli.project.clone(), cli.database.clone())?;
     let database_path = resolved_context.database.value.clone();
     let project = resolved_context.project.value.clone();
+    let idempotency_key = cli.idempotency_key.clone();
 
     match cli.command {
         crate::cli::Command::Init(_) => {
@@ -70,7 +71,8 @@ fn run(
         }
         crate::cli::Command::Project(project_command) => {
             let database = crate::store::Database::open(&database_path)?;
-            let mut app = crate::app::App::new(database);
+            let mut app =
+                crate::app::App::new(database).with_idempotency_key(idempotency_key.clone())?;
 
             match project_command.command {
                 crate::cli::ProjectSubcommand::Create(create_command) => {
@@ -97,7 +99,8 @@ fn run(
         }
         crate::cli::Command::Issue(issue_command) => {
             let database = crate::store::Database::open(&database_path)?;
-            let mut app = crate::app::App::new(database);
+            let mut app =
+                crate::app::App::new(database).with_idempotency_key(idempotency_key.clone())?;
 
             match issue_command.command {
                 crate::cli::IssueSubcommand::Create(create_command) => {
@@ -370,7 +373,8 @@ fn run(
         }
         crate::cli::Command::Decision(decision_command) => {
             let database = crate::store::Database::open(&database_path)?;
-            let mut app = crate::app::App::new(database);
+            let mut app =
+                crate::app::App::new(database).with_idempotency_key(idempotency_key.clone())?;
             match decision_command.command {
                 crate::cli::DecisionSubcommand::Request(command) => {
                     let project =
@@ -417,7 +421,8 @@ fn run(
         }
         crate::cli::Command::Event(event_command) => {
             let database = crate::store::Database::open(&database_path)?;
-            let mut app = crate::app::App::new(database);
+            let mut app =
+                crate::app::App::new(database).with_idempotency_key(idempotency_key.clone())?;
             match event_command.command {
                 crate::cli::EventSubcommand::List(command) => {
                     let page =
@@ -444,7 +449,8 @@ fn run(
         }
         crate::cli::Command::Status(_) => {
             let database = crate::store::Database::open(&database_path)?;
-            let mut app = crate::app::App::new(database);
+            let mut app =
+                crate::app::App::new(database).with_idempotency_key(idempotency_key.clone())?;
             let status = app.status()?;
             match output_mode {
                 crate::output::OutputMode::Human => crate::output::write_status_human(&status),
@@ -454,7 +460,8 @@ fn run(
         }
         crate::cli::Command::Audit(audit_command) => {
             let database = crate::store::Database::open(&database_path)?;
-            let mut app = crate::app::App::new(database);
+            let mut app =
+                crate::app::App::new(database).with_idempotency_key(idempotency_key.clone())?;
             match audit_command.command {
                 crate::cli::AuditSubcommand::List(command) => {
                     let events = app.list_audit_events(&crate::app::AuditFilter {
@@ -481,7 +488,8 @@ fn run(
             if database_path.is_file()
                 && let Ok(database) = crate::store::Database::open(&database_path)
             {
-                let mut app = crate::app::App::new(database);
+                let mut app =
+                    crate::app::App::new(database).with_idempotency_key(idempotency_key.clone())?;
                 app.record_context_inspection()?;
             }
             match output_mode {

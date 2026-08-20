@@ -49,6 +49,7 @@ fn read_sqlite_header_identity(
 
 struct AuditInsert<'a> {
     operation: &'a str,
+    idempotency_key: Option<&'a str>,
     success: bool,
     context: &'a crate::domain::ExecutionContext,
     target: Option<(&'a str, &'a str)>,
@@ -58,6 +59,56 @@ struct AuditInsert<'a> {
     exit_code: u8,
     changed_fields: &'a [&'a str],
     metadata_json: &'a str,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct IdempotencyRequest {
+    pub(crate) key: String,
+    operation: String,
+    request_hash: String,
+}
+
+impl IdempotencyRequest {
+    pub(crate) fn new(
+        key: &str,
+        operation: &str,
+        payload: serde_json::Value,
+    ) -> Result<Self, crate::error::AppError> {
+        crate::domain::validate_idempotency_key(key)?;
+        let canonical_payload = Self::canonicalize(payload);
+        let encoded = serde_json::to_vec(&canonical_payload)
+            .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
+        use sha2::Digest as _;
+        let digest = sha2::Sha256::digest(encoded);
+        let request_hash = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        Ok(Self {
+            key: key.to_owned(),
+            operation: operation.to_owned(),
+            request_hash,
+        })
+    }
+
+    fn canonicalize(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(object) => {
+                let mut entries = object.into_iter().collect::<Vec<_>>();
+                entries.sort_by(|left, right| left.0.cmp(&right.0));
+                serde_json::Value::Object(
+                    entries
+                        .into_iter()
+                        .map(|(key, value)| (key, Self::canonicalize(value)))
+                        .collect(),
+                )
+            }
+            serde_json::Value::Array(values) => {
+                serde_json::Value::Array(values.into_iter().map(Self::canonicalize).collect())
+            }
+            value => value,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -166,6 +217,15 @@ impl Database {
         name: &str,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::Project, crate::error::AppError> {
+        self.create_project_with_idempotency(name, context, None)
+    }
+
+    pub fn create_project_with_idempotency(
+        &mut self,
+        name: &str,
+        context: &crate::domain::ExecutionContext,
+        idempotency: Option<&IdempotencyRequest>,
+    ) -> Result<crate::domain::Project, crate::error::AppError> {
         let project = crate::domain::Project {
             id: uuid::Uuid::new_v4(),
             name: name.to_owned(),
@@ -176,6 +236,10 @@ impl Database {
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(crate::error::AppError::from)?;
+
+        if let Some(project) = Self::check_idempotency(&transaction, idempotency)? {
+            return Ok(project);
+        }
 
         match transaction.execute(
             "INSERT INTO projects (id, name, archived, created_at) VALUES (?1, ?2, ?3, ?4)",
@@ -215,6 +279,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "project_create",
+                idempotency_key: idempotency.map(|request| request.key.as_str()),
                 success: true,
                 context,
                 target: Some(("project", &project_id)),
@@ -226,6 +291,7 @@ impl Database {
                 metadata_json: "{}",
             },
         )?;
+        Self::remember_idempotency(&transaction, idempotency, &project)?;
         transaction.commit().map_err(crate::error::AppError::from)?;
 
         Ok(project)
@@ -414,6 +480,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: transition.operation(),
+                idempotency_key: None,
                 success: true,
                 context,
                 target: Some(("issue", &issue_id)),
@@ -510,6 +577,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "issue_edit",
+                idempotency_key: None,
                 success: true,
                 context,
                 target: Some(("issue", &issue_id)),
@@ -607,6 +675,7 @@ impl Database {
                 &transaction,
                 AuditInsert {
                     operation: "issue_comment",
+                    idempotency_key: None,
                     success: true,
                     context,
                     target: Some(("issue", &issue_id)),
@@ -797,6 +866,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "decision_request",
+                idempotency_key: None,
                 success: true,
                 context,
                 target: Some(("issue", &issue_id)),
@@ -983,6 +1053,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "decision_resolve",
+                idempotency_key: None,
                 success: true,
                 context,
                 target: Some(("issue", &issue_id_string)),
@@ -1101,6 +1172,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "issue_dependency_add",
+                idempotency_key: None,
                 success: true,
                 context,
                 target: Some(("issue", &blocked_id)),
@@ -1184,6 +1256,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "issue_dependency_remove",
+                idempotency_key: None,
                 success: true,
                 context,
                 target: Some(("issue", &blocked_id)),
@@ -1324,6 +1397,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "issue_parent_set",
+                idempotency_key: None,
                 success: true,
                 context,
                 target: Some(("issue", &child_id)),
@@ -1530,6 +1604,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "issue_claim",
+                idempotency_key: None,
                 success: true,
                 context,
                 target: Some(("issue", &issue_id)),
@@ -1607,6 +1682,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "issue_heartbeat",
+                idempotency_key: None,
                 success: true,
                 context,
                 target: Some(("issue", &issue_id)),
@@ -1718,6 +1794,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "issue_takeover",
+                idempotency_key: None,
                 success: true,
                 context,
                 target: Some(("issue", &issue_id)),
@@ -2066,6 +2143,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation,
+                idempotency_key: None,
                 success: true,
                 context,
                 target: subject
@@ -2081,6 +2159,77 @@ impl Database {
             },
         )?;
         transaction.commit().map_err(crate::error::AppError::from)
+    }
+
+    fn check_idempotency<T>(
+        transaction: &rusqlite::Transaction<'_>,
+        request: Option<&IdempotencyRequest>,
+    ) -> Result<Option<T>, crate::error::AppError>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let Some(request) = request else {
+            return Ok(None);
+        };
+        use rusqlite::OptionalExtension as _;
+        let record = transaction
+            .query_row(
+                "SELECT operation, request_hash, response_json
+                 FROM idempotency_records WHERE idempotency_key = ?1",
+                [&request.key],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(crate::error::AppError::from)?;
+        let Some((operation, request_hash, response_json)) = record else {
+            return Ok(None);
+        };
+        if operation != request.operation || request_hash != request.request_hash {
+            return Err(crate::error::AppError::IdempotencyConflict);
+        }
+        serde_json::from_str(&response_json)
+            .map(Some)
+            .map_err(|error| {
+                crate::error::AppError::Internal(format!(
+                    "stored idempotency response is invalid: {error}"
+                ))
+            })
+    }
+
+    fn remember_idempotency<T>(
+        transaction: &rusqlite::Transaction<'_>,
+        request: Option<&IdempotencyRequest>,
+        result: &T,
+    ) -> Result<(), crate::error::AppError>
+    where
+        T: serde::Serialize,
+    {
+        let Some(request) = request else {
+            return Ok(());
+        };
+        let response_json = serde_json::to_string(result)
+            .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
+        transaction
+            .execute(
+                "INSERT INTO idempotency_records
+                 (idempotency_key, operation, request_hash, response_json, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    request.key,
+                    request.operation,
+                    request.request_hash,
+                    response_json,
+                    chrono::Utc::now().to_rfc3339(),
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        Ok(())
     }
 
     pub fn record_failed_operation(
@@ -2106,6 +2255,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation,
+                idempotency_key: None,
                 success: false,
                 context,
                 target: subject
@@ -2147,9 +2297,10 @@ impl Database {
                 "INSERT INTO audit_events (
                     id, occurred_at, started_at, finished_at, operation, success, exit_code,
                     initiator_kind, initiator_name, session_id, project_id, project_name,
-                    target_type, target_id, revision, changed_fields_json, metadata_json
+                    target_type, target_id, revision, idempotency_key, changed_fields_json,
+                    metadata_json
                  ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
                  )",
                 rusqlite::params![
                     uuid::Uuid::new_v4().to_string(),
@@ -2167,6 +2318,7 @@ impl Database {
                     target_type,
                     target_id,
                     event.revision,
+                    event.idempotency_key,
                     changed_fields_json,
                     event.metadata_json,
                 ],
@@ -2512,6 +2664,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "issue_create",
+                idempotency_key: None,
                 success: true,
                 context,
                 target: Some(("issue", &issue_id)),
@@ -3116,6 +3269,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "init",
+                idempotency_key: None,
                 success: true,
                 context,
                 target: None,
@@ -3166,6 +3320,7 @@ impl Database {
                 &transaction,
                 AuditInsert {
                     operation: "schema_migrate",
+                    idempotency_key: None,
                     success: true,
                     context: &context,
                     target: None,
