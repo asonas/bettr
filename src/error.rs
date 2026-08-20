@@ -14,6 +14,7 @@ pub enum AppError {
     InvalidInput(String),
     NotFound(String),
     Conflict(String),
+    IdempotencyConflict,
     InvalidTransition(String),
     RevisionConflict {
         current_revision: i64,
@@ -34,9 +35,10 @@ impl AppError {
         match self {
             Self::InvalidInput(_) => ExitCode::InvalidInput,
             Self::NotFound(_) => ExitCode::NotFound,
-            Self::Conflict(_) | Self::InvalidTransition(_) | Self::RevisionConflict { .. } => {
-                ExitCode::Conflict
-            }
+            Self::Conflict(_)
+            | Self::IdempotencyConflict
+            | Self::InvalidTransition(_)
+            | Self::RevisionConflict { .. } => ExitCode::Conflict,
             Self::ProjectNameConflict => ExitCode::Conflict,
             Self::DatabaseBusy(_) => ExitCode::DatabaseBusy,
             Self::Internal(_) => ExitCode::Internal,
@@ -51,6 +53,7 @@ impl AppError {
             Self::InvalidInput(_) => "invalid_input",
             Self::NotFound(_) => "not_found",
             Self::Conflict(_) => "conflict",
+            Self::IdempotencyConflict => "idempotency_conflict",
             Self::InvalidTransition(_) => "invalid_transition",
             Self::RevisionConflict { .. } => "revision_conflict",
             Self::ProjectNameConflict => "project_name_conflict",
@@ -72,6 +75,9 @@ impl std::fmt::Display for AppError {
             | Self::InvalidTransition(message)
             | Self::DatabaseBusy(message)
             | Self::Internal(message) => formatter.write_str(message),
+            Self::IdempotencyConflict => formatter.write_str(
+                "idempotency key has already been used with a different operation or payload",
+            ),
             Self::RevisionConflict { current_revision } => write!(
                 formatter,
                 "issue revision conflict; current revision is {current_revision}"
@@ -169,5 +175,13 @@ mod tests {
             error.to_string(),
             "database schema version 99 is unsupported; current version is 3"
         );
+    }
+
+    #[test]
+    fn idempotency_conflict_has_a_stable_contract() {
+        let error = super::AppError::IdempotencyConflict;
+
+        assert_eq!(error.exit_code() as u8, 4);
+        assert_eq!(error.code(), "idempotency_conflict");
     }
 }

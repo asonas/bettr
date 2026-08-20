@@ -273,6 +273,7 @@ fn status_code(error: &crate::error::AppError) -> u16 {
         crate::error::AppError::NotFound(_) | crate::error::AppError::DatabaseNotInitialized => 404,
         crate::error::AppError::DatabaseBusy(_) => 503,
         crate::error::AppError::Conflict(_)
+        | crate::error::AppError::IdempotencyConflict
         | crate::error::AppError::InvalidTransition(_)
         | crate::error::AppError::RevisionConflict { .. }
         | crate::error::AppError::ProjectNameConflict => 409,

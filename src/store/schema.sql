@@ -75,6 +75,7 @@ CREATE TABLE audit_events (
     target_type TEXT,
     target_id TEXT,
     revision INTEGER,
+    idempotency_key TEXT,
     changed_fields_json TEXT NOT NULL DEFAULT '[]',
     metadata_json TEXT NOT NULL DEFAULT '{}'
 );
@@ -82,6 +83,18 @@ CREATE TABLE audit_events (
 CREATE INDEX audit_events_project_id ON audit_events(project_id);
 CREATE INDEX audit_events_operation ON audit_events(operation);
 CREATE INDEX audit_events_finished_at ON audit_events(finished_at);
+CREATE INDEX audit_events_idempotency_key ON audit_events(idempotency_key);
+
+CREATE TABLE idempotency_records (
+    idempotency_key TEXT PRIMARY KEY,
+    operation TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    response_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX idempotency_records_created_at
+    ON idempotency_records(created_at);
 
 CREATE TABLE issue_dependencies (
     id TEXT PRIMARY KEY,
@@ -144,4 +157,4 @@ CREATE INDEX decision_requests_status
     ON decision_requests(status);
 
 PRAGMA application_id = 1112822866;
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;

@@ -83,7 +83,7 @@ impl ExecutionContext {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Project {
     pub id: uuid::Uuid,
     pub name: String,
@@ -91,7 +91,9 @@ pub struct Project {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Serialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Deserialize, serde::Serialize,
+)]
 #[serde(rename_all = "snake_case")]
 #[value(rename_all = "snake_case")]
 pub enum IssueState {
@@ -142,7 +144,9 @@ impl IssueState {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Serialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Deserialize, serde::Serialize,
+)]
 #[serde(rename_all = "snake_case")]
 #[value(rename_all = "snake_case")]
 pub enum WaitKind {
@@ -491,7 +495,9 @@ fn validate_transition_metadata(name: &str, value: &str) -> Result<(), DomainErr
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Serialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Deserialize, serde::Serialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Priority {
     Low,
@@ -500,7 +506,9 @@ pub enum Priority {
     Critical,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Serialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Deserialize, serde::Serialize,
+)]
 #[serde(rename_all = "snake_case")]
 #[value(rename_all = "snake_case")]
 pub enum AssigneeKind {
@@ -550,7 +558,7 @@ impl Priority {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Issue {
     pub id: uuid::Uuid,
     pub project_id: uuid::Uuid,
@@ -577,7 +585,7 @@ pub struct IssueFilter {
     pub include_done: bool,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct IssueListItem {
     pub project: String,
     #[serde(flatten)]
@@ -643,7 +651,7 @@ pub struct IssueParent {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct IssueLease {
     pub agent: String,
     pub session_id: String,
@@ -654,13 +662,13 @@ pub struct IssueLease {
     pub stale: bool,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct ClaimedIssue {
     pub issue: Issue,
     pub lease: IssueLease,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct DecisionRequest {
     pub id: uuid::Uuid,
     pub issue: String,
@@ -722,7 +730,7 @@ pub struct Status {
     pub active: Vec<IssueListItem>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct NewIssue {
     pub title: String,
     pub body: Option<String>,
@@ -748,13 +756,77 @@ impl NewIssue {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct IssuePatch {
     pub title: Option<String>,
     pub body: Option<Option<String>>,
     pub priority: Option<Option<Priority>>,
     pub assignee_kind: Option<Option<AssigneeKind>>,
     pub assignee_name: Option<Option<String>>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BatchOperation {
+    IssueCreate {
+        project: Option<String>,
+        title: String,
+        body: Option<String>,
+        priority: Option<Priority>,
+    },
+    IssueEdit {
+        project: Option<String>,
+        number: i64,
+        revision: i64,
+        patch: IssuePatch,
+    },
+    IssueComment {
+        project: Option<String>,
+        number: i64,
+        body: String,
+    },
+    IssueStart {
+        project: Option<String>,
+        number: i64,
+        revision: i64,
+    },
+    IssueBlock {
+        project: Option<String>,
+        number: i64,
+        revision: i64,
+        reason: String,
+        wait_kind: WaitKind,
+    },
+    IssueResume {
+        project: Option<String>,
+        number: i64,
+        revision: i64,
+    },
+    IssueComplete {
+        project: Option<String>,
+        number: i64,
+        revision: i64,
+        summary: String,
+        verification: String,
+    },
+    IssueCancel {
+        project: Option<String>,
+        number: i64,
+        revision: i64,
+        reason: String,
+    },
+    IssueReopen {
+        project: Option<String>,
+        number: i64,
+        revision: i64,
+        reason: String,
+    },
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct BatchResult {
+    pub operation: String,
+    pub result: serde_json::Value,
 }
 
 impl IssuePatch {
@@ -876,7 +948,7 @@ impl IssuePatch {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Comment {
     pub id: uuid::Uuid,
     pub issue_id: uuid::Uuid,
@@ -946,6 +1018,20 @@ pub fn validate_project_name(name: &str) -> Result<(), crate::error::AppError> {
     Ok(())
 }
 
+pub fn validate_idempotency_key(key: &str) -> Result<(), crate::error::AppError> {
+    if key.trim().is_empty() {
+        return Err(crate::error::AppError::InvalidInput(
+            "idempotency key must not be empty".to_owned(),
+        ));
+    }
+    if key.chars().count() > 200 {
+        return Err(crate::error::AppError::InvalidInput(
+            "idempotency key must contain at most 200 Unicode scalar values".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1005,5 +1091,25 @@ mod tests {
             Err(crate::error::AppError::InvalidInput(message))
                 if message == "issue body must contain at most 1 MiB"
         ));
+    }
+
+    #[test]
+    fn idempotency_key_validation_rejects_blank_and_oversized_keys() {
+        assert!(super::validate_idempotency_key(" ").is_err());
+        assert!(super::validate_idempotency_key(&"a".repeat(201)).is_err());
+        assert!(super::validate_idempotency_key("request-123").is_ok());
+    }
+
+    #[test]
+    fn batch_operation_uses_a_stable_tagged_json_shape() {
+        let operation: super::BatchOperation =
+            serde_json::from_str(r#"{"operation":"issue_create","title":"new issue"}"#).unwrap();
+        assert!(matches!(
+            operation,
+            super::BatchOperation::IssueCreate { .. }
+        ));
+        assert!(
+            serde_json::from_str::<super::BatchOperation>(r#"{"operation":"unknown"}"#).is_err()
+        );
     }
 }
