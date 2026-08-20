@@ -316,7 +316,7 @@ Expected: the binary builds from the same committed source as the tests.
 
 Run: `git diff --check`, `git status --short --branch`, and `git --no-pager log --oneline --decorate -8`. Confirm only the approved spec, plan, implementation, test, and documentation files are changed; do not rebase, merge, create a PR, or remove the worktree.
 
-- [ ] **Step 6: Record verification in Issue #19**
+- [x] **Step 6: Record verification in Issue #19**
 
 Add one `[Conversation update]` comment containing the verified commit, test commands/results, loopback and human-only safety behavior, and any remaining limitation. Re-read the Issue and recent history, then transition to `done` only if the requested scope and verification evidence are complete; otherwise record the concrete blocker and keep the Issue active.
 
