@@ -64,3 +64,13 @@ for required in \
   "SHA256SUMS"; do
   grep -Fq -- "$required" "$release_workflow"
 done
+
+for required in \
+  'SHA256SUMS' \
+  'gh attestation verify' \
+  '/releases/download/v' \
+  '.prev' \
+  'cargo install --path .' \
+  'skill-installer/scripts/install-skill-from-github.py'; do
+  grep -Fq -- "$required" "$repo_root/README.md"
+done

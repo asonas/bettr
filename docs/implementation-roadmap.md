@@ -28,7 +28,7 @@ Web UIはネットワーク共有を目的とせず、`bettr web`でloopbackに�
 
 ## Skills and Distribution
 
-各Phaseと同時にCodexおよびClaude Code向けの最小スキルを更新します。スキルは利用可能なcapabilityだけを使い、Issue化の基準、競合時の再読込、完了根拠の記録を定めます。配布はMIT Licenseの下でGitHub Releasesから行います。Phase 1の間は`cargo install --path .`によるローカル利用も維持します。
+各Phaseと同時にCodexおよびClaude Code向けの最小スキルを更新します。スキルは利用可能なcapabilityだけを使い、Issue化の基準、競合時の再読込、完了根拠の記録を定めます。配布はMIT Licenseの下でGitHub Releasesから行います。Phase 1の間は`cargo install --path .`によるローカル利用も維持します。GitHub Releasesの初期配布は、macOS/Linuxのx86_64・aarch64向けarchive、SHA-256、artifact attestationをタグ駆動workflowで提供します。HomebrewやOS-native installerは後続Issueの範囲です。
 
 ## Performance Gate
 

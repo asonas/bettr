@@ -10,6 +10,70 @@ Install the current checkout with Cargo:
 cargo install --path .
 ```
 
+### Release binaries
+
+Tagged GitHub Releases provide versioned native binaries for:
+
+| Platform | Target |
+| --- | --- |
+| Linux x86_64 | `x86_64-unknown-linux-gnu` |
+| Linux arm64 | `aarch64-unknown-linux-gnu` |
+| macOS x86_64 | `x86_64-apple-darwin` |
+| macOS arm64 | `aarch64-apple-darwin` |
+
+Choose a fixed version and target, then download the matching archive and its
+checksum sidecar. The Release also contains a combined `SHA256SUMS` manifest.
+
+```sh
+VERSION=0.1.0
+TARGET=x86_64-unknown-linux-gnu
+ASSET="bettr-${VERSION}-${TARGET}.tar.gz"
+BASE="https://github.com/asonas/bettr/releases/download/v${VERSION}"
+TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
+
+curl -fsSLo "$TMP_DIR/$ASSET" "$BASE/$ASSET"
+curl -fsSLo "$TMP_DIR/$ASSET.sha256" "$BASE/$ASSET.sha256"
+(
+  cd "$TMP_DIR"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -c "$ASSET.sha256"
+  else
+    shasum -a 256 -c "$ASSET.sha256"
+  fi
+  tar -xzf "$ASSET"
+  ./bettr --version
+)
+```
+
+For a provenance check on a public Release, install the GitHub CLI and run:
+
+```sh
+gh attestation verify "$TMP_DIR/$ASSET" --repo asonas/bettr
+```
+
+To install or upgrade after verification, place the extracted binary in a
+directory on `PATH`. Keep the previous binary beside it as `.prev` so a failed
+post-upgrade check can be rolled back:
+
+```sh
+INSTALL_DIR="${BETTR_INSTALL_DIR:-$HOME/.local/bin}"
+INSTALL_PATH="$INSTALL_DIR/bettr"
+mkdir -p "$INSTALL_DIR"
+install -m 755 "$TMP_DIR/bettr" "$INSTALL_PATH.new"
+if [ -e "$INSTALL_PATH" ]; then
+  mv "$INSTALL_PATH" "$INSTALL_PATH.prev"
+fi
+mv "$INSTALL_PATH.new" "$INSTALL_PATH"
+"$INSTALL_PATH" --version
+```
+
+If the new binary cannot start, restore the previous version with
+`mv "$INSTALL_PATH.prev" "$INSTALL_PATH"`. The release workflow refuses to
+overwrite an existing Release tag. Homebrew packages, OS-native installers,
+automatic updates, and developer-managed signing keys are outside this
+distribution path.
+
 Initialize the database explicitly before using it:
 
 ```sh
