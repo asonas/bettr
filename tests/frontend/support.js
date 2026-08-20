@@ -3,6 +3,7 @@ export function mountShell() {
     <main id="main"><div id="app"></div></main>
     <span id="sync-label"></span><span id="breadcrumbs"></span>
     <div id="connection-state"></div><div id="project-nav-list"></div>
+    <div id="copy-feedback" role="status" aria-atomic="true"></div>
     <button id="updated-nav" type="button" aria-label="Updated Issues" aria-expanded="false"><span id="updated-count"></span></button>
     <div id="updated-menu" role="menu" aria-label="Updated Issues" hidden></div>
     <button id="theme-toggle"></button>

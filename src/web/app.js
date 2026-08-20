@@ -12,6 +12,7 @@ export function createWebController({
   document: documentRef = globalThis.document,
   window: windowRef = globalThis.window,
   fetch: fetchRef = globalThis.fetch,
+  clipboard: clipboardRef,
   state: stateApi = { allIssues, applyStatusUpdate, kanbanColumns },
 } = {}) {
   const document = documentRef;
@@ -24,6 +25,8 @@ export function createWebController({
   const updatedNav = document.querySelector("#updated-nav");
   const updatedCount = document.querySelector("#updated-count");
   const updatedMenu = document.querySelector("#updated-menu");
+  const copyFeedback = document.querySelector("#copy-feedback");
+  const clipboard = clipboardRef ?? window.navigator?.clipboard;
   const state = { status: null, snapshot: "", updatedIssues: new Set(), project: "" };
   let statusPollInFlight = false;
   let projectNavInFlight = false;
@@ -42,6 +45,11 @@ export function createWebController({
   }
 
   function issueKey(issue) { return `${issue.project}#${issue.number}`; }
+
+  function copyIssueButton(key) {
+    const escapedKey = escapeHtml(key);
+    return `<button class="copy-key-button" type="button" data-copy-key="${escapedKey}" aria-label="Copy ${escapedKey}">Copy</button>`;
+  }
 
   function issueRow(item) {
     const issue = item.issue || item;
@@ -66,12 +74,12 @@ export function createWebController({
     const priority = issue.priority ? `<span class="priority ${escapeHtml(issue.priority)}">${escapeHtml(issue.priority)}</span>` : "";
     const assignee = issue.assignee_name ? `<span>${escapeHtml(issue.assignee_name)}</span>` : "";
     const updated = state.updatedIssues.has(key);
-    return `<button class="kanban-card${updated ? " is-updated" : ""}" type="button" data-project="${escapeHtml(project)}" data-number="${issue.number}"${updated ? ` data-updated="true"` : ""}>
+    return `<div class="kanban-card-shell"><button class="kanban-card${updated ? " is-updated" : ""}" type="button" data-project="${escapeHtml(project)}" data-number="${issue.number}"${updated ? ` data-updated="true"` : ""}>
       <span class="kanban-card-header"><span class="issue-key">${escapeHtml(key)}</span>${updated ? `<span class="sr-only">Updated</span>` : ""}</span>
       <span class="kanban-card-title">${escapeHtml(issue.title)}</span>
       <span class="kanban-card-meta">${priority}${assignee}</span>
       <time class="kanban-card-time" datetime="${escapeHtml(issue.updated_at)}">${formatDate(issue.updated_at)}</time>
-    </button>`;
+    </button>${copyIssueButton(key)}</div>`;
   }
 
   function renderProjects(project = "") {
@@ -99,6 +107,7 @@ export function createWebController({
       return `<section class="kanban-column" data-state="${key}"><header class="kanban-column-header"><h2>${title}</h2><span>${columnIssues.length}</span></header><div class="kanban-cards">${columnIssues.length ? columnIssues.map(kanbanCard).join("") : `<div class="kanban-empty">No Issues</div>`}</div></section>`;
     }).join("");
     bindIssueRows();
+    bindCopyButtons();
     if (focusedCard) [...document.querySelectorAll(".kanban-card")].find((card) => issueKey({ project: card.dataset.project, number: card.dataset.number }) === focusedCard)?.focus();
   }
 
@@ -109,6 +118,7 @@ export function createWebController({
     app.innerHTML = `<div class="loading-state"><span class="loader" aria-hidden="true"></span><span>Loading Issue</span></div>`;
     const response = await api(`/api/issues/${encodeURIComponent(number)}?project=${encodeURIComponent(project)}`);
     const issue = response.data.issue;
+    const key = issueKey({ project, number });
     const history = response.data.history || [];
     const activity = history.map((event) => {
       const body = activityBody(event);
@@ -117,7 +127,8 @@ export function createWebController({
       const session = event.context?.session_id ? ` · ${event.context.session_id}` : "";
       return `<article class="activity-item"><div class="activity-meta"><span class="activity-type">${escapeHtml(label)} · ${escapeHtml(actor)}${escapeHtml(session)}</span><time datetime="${escapeHtml(event.created_at)}">${formatDate(event.created_at)}</time></div><p class="activity-body">${escapeHtml(body || "Change recorded")}</p></article>`;
     }).join("");
-    app.innerHTML = `<div class="detail-layout"><article><p class="eyebrow">${escapeHtml(project)} / Issue ${number}</p><p class="detail-key">${escapeHtml(issueKey({ project, number }))} · revision ${issue.revision}</p><h1 class="detail-title">${escapeHtml(issue.title)}</h1><div class="detail-body">${escapeHtml(issue.body || "")}</div><h2 class="activity-heading">Activity</h2><div class="activity-list">${activity || `<div class="empty-state"><strong>No activity yet</strong><span>Comments and state changes from the CLI will appear here.</span></div>`}</div></article><aside class="property-rail" aria-label="Issue properties"><dl class="property-list"><div><dt>State</dt><dd><span class="state-pill ${escapeHtml(issue.state)}">${escapeHtml(statusLabels[issue.state] || issue.state)}</span></dd></div><div><dt>Priority</dt><dd>${escapeHtml(issue.priority || "Not set")}</dd></div><div><dt>Assignee</dt><dd>${escapeHtml(issue.assignee_name || "Unassigned")}</dd></div><div><dt>Created</dt><dd>${formatDate(issue.created_at)}</dd></div><div><dt>Updated</dt><dd>${formatDate(issue.updated_at)}</dd></div><div><dt>Context</dt><dd>revision ${issue.revision}</dd></div></dl></aside></div>`;
+    app.innerHTML = `<div class="detail-layout"><article><p class="eyebrow">${escapeHtml(project)} / Issue ${number}</p><div class="detail-key-row"><p class="detail-key">${escapeHtml(key)} · revision ${issue.revision}</p>${copyIssueButton(key)}</div><h1 class="detail-title">${escapeHtml(issue.title)}</h1><div class="detail-body">${escapeHtml(issue.body || "")}</div><h2 class="activity-heading">Activity</h2><div class="activity-list">${activity || `<div class="empty-state"><strong>No activity yet</strong><span>Comments and state changes from the CLI will appear here.</span></div>`}</div></article><aside class="property-rail" aria-label="Issue properties"><dl class="property-list"><div><dt>State</dt><dd><span class="state-pill ${escapeHtml(issue.state)}">${escapeHtml(statusLabels[issue.state] || issue.state)}</span></dd></div><div><dt>Priority</dt><dd>${escapeHtml(issue.priority || "Not set")}</dd></div><div><dt>Assignee</dt><dd>${escapeHtml(issue.assignee_name || "Unassigned")}</dd></div><div><dt>Created</dt><dd>${formatDate(issue.created_at)}</dd></div><div><dt>Updated</dt><dd>${formatDate(issue.updated_at)}</dd></div><div><dt>Context</dt><dd>revision ${issue.revision}</dd></div></dl></aside></div>`;
+    bindCopyButtons();
   }
 
   async function renderRecent() {
@@ -257,6 +268,38 @@ export function createWebController({
       state.updatedIssues.delete(key);
       renderUpdatedMenu();
       location.hash = `#/issues/${encodeURIComponent(row.dataset.project)}/${row.dataset.number}`;
+    }));
+  }
+
+  function announceCopy(message, isError = false) {
+    if (!copyFeedback) return;
+    copyFeedback.textContent = message;
+    copyFeedback.classList.toggle("is-error", isError);
+  }
+
+  async function copyIssueKey(key, button) {
+    try {
+      if (!clipboard?.writeText) throw new Error("Clipboard unavailable");
+      await clipboard.writeText(key);
+      button.textContent = "Copied";
+      button.setAttribute("aria-label", `Copied ${key}`);
+      announceCopy(`Copied ${key}`);
+      window.setTimeout(() => {
+        if (!button.isConnected) return;
+        button.textContent = "Copy";
+        button.setAttribute("aria-label", `Copy ${key}`);
+      }, 1400);
+    } catch {
+      button.textContent = "Copy";
+      button.setAttribute("aria-label", `Copy ${key}`);
+      announceCopy(`Unable to copy ${key}`, true);
+    }
+  }
+
+  function bindCopyButtons() {
+    document.querySelectorAll("[data-copy-key]").forEach((button) => button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      copyIssueKey(button.dataset.copyKey, button);
     }));
   }
 

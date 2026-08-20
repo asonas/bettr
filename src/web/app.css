@@ -96,6 +96,9 @@ a { color: inherit; text-decoration: none; }
 .breadcrumbs span:last-child { color: var(--ink); font-weight: 600; }
 .topbar-actions { display: flex; align-items: center; gap: 13px; }
 .sync-label { color: var(--ink-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.copy-feedback { color: var(--ink-muted); font-size: 11px; white-space: nowrap; }
+.copy-feedback:empty { display: none; }
+.copy-feedback.is-error { color: var(--danger); }
 .icon-button { display: grid; width: 30px; height: 30px; color: var(--ink-muted); background: transparent; border: 1px solid transparent; border-radius: 7px; cursor: pointer; place-items: center; }
 .icon-button:hover { color: var(--ink); background: var(--surface); border-color: var(--line); }
 
@@ -121,13 +124,18 @@ h1 { margin: 0; font-size: clamp(26px, 3vw, 36px); font-weight: 720; letter-spac
 .kanban-column-header h2 { margin: 0; color: var(--ink-muted); font-size: 12px; font-weight: 700; letter-spacing: .01em; }
 .kanban-column-header span { color: var(--ink-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .kanban-cards { display: grid; min-height: 76px; gap: 8px; }
-.kanban-card { display: grid; gap: 9px; width: 100%; min-height: 122px; padding: 12px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 1px 1px rgba(0,0,0,.02); cursor: pointer; text-align: left; transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease; }
+.kanban-card-shell { position: relative; }
+.kanban-card { display: grid; gap: 9px; width: 100%; min-height: 122px; padding: 12px 56px 12px 12px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 1px 1px rgba(0,0,0,.02); cursor: pointer; text-align: left; transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease; }
 .kanban-card:hover, .kanban-card:focus-visible { border-color: var(--line-strong); box-shadow: var(--shadow); transform: translateY(-1px); }
 .kanban-card.is-updated { padding-inline-start: 9px; background: var(--updated-surface); border-inline-start: 3px solid var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent); }
 .kanban-card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; color: var(--ink-muted); font-size: 10px; }
 .kanban-card-title { display: -webkit-box; overflow: hidden; font-size: 13px; font-weight: 620; line-height: 1.35; text-overflow: ellipsis; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .kanban-card-meta { display: flex; min-width: 0; gap: 8px; overflow: hidden; color: var(--ink-muted); font-size: 10px; white-space: nowrap; }
 .kanban-card-time { color: var(--ink-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.copy-key-button { min-width: 40px; min-height: 30px; padding: 5px 7px; color: var(--ink-muted); background: var(--surface-muted); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; font-size: 10px; line-height: 1; transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease, transform 140ms ease; }
+.copy-key-button:hover { color: var(--ink); background: var(--surface); border-color: var(--line-strong); }
+.copy-key-button:active { transform: scale(.96); }
+.kanban-card-shell > .copy-key-button { position: absolute; top: 8px; right: 8px; }
 .kanban-empty { min-height: 76px; padding: 16px 12px; color: var(--ink-muted); border: 1px dashed var(--line-strong); border-radius: 9px; font-size: 11px; text-align: center; }
 
 .issue-list { overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 1px 1px rgba(0,0,0,.02); }
@@ -157,7 +165,8 @@ h1 { margin: 0; font-size: clamp(26px, 3vw, 36px); font-weight: 720; letter-spac
 
 .detail-layout { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: clamp(32px, 6vw, 74px); align-items: start; }
 .detail-title { margin: 7px 0 12px; font-size: clamp(27px, 4vw, 40px); line-height: 1.08; }
-.detail-key { color: var(--ink-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.detail-key-row { display: flex; align-items: center; gap: 9px; margin: 1em 0; }
+.detail-key { margin: 0; color: var(--ink-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
 .detail-body { margin: 29px 0 37px; color: var(--ink); font-size: 14px; line-height: 1.75; white-space: pre-wrap; }
 .detail-body:empty::before { color: var(--ink-faint); content: "No body"; }
 .activity-heading { display: flex; align-items: center; gap: 9px; margin: 0 0 12px; color: var(--ink-muted); font-size: 11px; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
