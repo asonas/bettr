@@ -202,6 +202,232 @@ pub(crate) struct ExistingJsonlEvent {
     pub(crate) hash: String,
 }
 
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct AuditVerifyResult {
+    pub(crate) valid: bool,
+    pub(crate) event_count: usize,
+    pub(crate) first_sequence: Option<i64>,
+    pub(crate) last_sequence: Option<i64>,
+    #[serde(skip)]
+    pub(crate) last_hash: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct AuditArchiveResult {
+    pub(crate) archived: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) archive_path: Option<std::path::PathBuf>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct AuditRebuildResult {
+    pub(crate) rebuilt: bool,
+    pub(crate) event_count: usize,
+    pub(crate) first_sequence: Option<i64>,
+    pub(crate) last_sequence: Option<i64>,
+}
+
+pub(crate) fn verify_path(
+    path: &std::path::Path,
+) -> Result<AuditVerifyResult, crate::error::AppError> {
+    let bytes = std::fs::read(path).map_err(|_| crate::error::AppError::AuditOperation {
+        operation: "verify",
+    })?;
+    if bytes.is_empty() {
+        return Ok(AuditVerifyResult {
+            valid: true,
+            event_count: 0,
+            first_sequence: None,
+            last_sequence: None,
+            last_hash: None,
+        });
+    }
+    if !bytes.ends_with(b"\n") {
+        return Err(integrity_error(
+            "audit JSONL integrity check failed: incomplete final line",
+            bytes.iter().filter(|byte| **byte == b'\n').count() + 1,
+            None,
+        ));
+    }
+
+    let mut previous: Option<ExistingJsonlEvent> = None;
+    let mut event_ids = std::collections::BTreeSet::new();
+    let mut event_count = 0_usize;
+    let mut first_sequence = None;
+    let mut last_sequence = None;
+    let final_line_index = bytes.iter().filter(|byte| **byte == b'\n').count();
+    for (line_index, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
+        if line_index == final_line_index {
+            continue;
+        }
+        if line.is_empty() {
+            return Err(integrity_error(
+                "audit JSONL integrity check failed: empty line",
+                line_index + 1,
+                None,
+            ));
+        }
+        let line_number = line_index + 1;
+        let value = serde_json::from_slice::<serde_json::Value>(line).map_err(|_| {
+            integrity_error(
+                "audit JSONL integrity check failed: invalid JSON line",
+                line_number,
+                None,
+            )
+        })?;
+        let schema_version = value
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64);
+        if schema_version != Some(1) {
+            return Err(integrity_error(
+                "audit JSONL integrity check failed: unsupported schema version",
+                line_number,
+                None,
+            ));
+        }
+        let event = serde_json::from_value::<ExistingJsonlEvent>(value.clone()).map_err(|_| {
+            integrity_error(
+                "audit JSONL integrity check failed: missing event fields",
+                line_number,
+                None,
+            )
+        })?;
+        if event.sequence <= 0 {
+            return Err(integrity_error(
+                "audit JSONL integrity check failed: invalid sequence",
+                line_number,
+                Some(event.sequence),
+            ));
+        }
+        if let Some(previous_event) = &previous {
+            if event.sequence != previous_event.sequence + 1 {
+                return Err(integrity_error(
+                    "audit JSONL integrity check failed: sequence is not contiguous",
+                    line_number,
+                    Some(event.sequence),
+                ));
+            }
+            if event.previous_hash.as_deref() != Some(previous_event.hash.as_str()) {
+                return Err(integrity_error(
+                    "audit JSONL integrity check failed: previous hash does not match",
+                    line_number,
+                    Some(event.sequence),
+                ));
+            }
+        }
+        if !event_ids.insert(event.event_id.clone()) {
+            return Err(integrity_error(
+                "audit JSONL integrity check failed: duplicate event id",
+                line_number,
+                Some(event.sequence),
+            ));
+        }
+        let mut hash_input = value;
+        let Some(object) = hash_input.as_object_mut() else {
+            return Err(integrity_error(
+                "audit JSONL integrity check failed: event is not an object",
+                line_number,
+                Some(event.sequence),
+            ));
+        };
+        object.remove("hash");
+        let encoded = serde_json::to_vec(&canonicalize(hash_input)).map_err(|_| {
+            integrity_error(
+                "audit JSONL integrity check failed: event cannot be serialized",
+                line_number,
+                Some(event.sequence),
+            )
+        })?;
+        if sha256_hex(&encoded) != event.hash {
+            return Err(integrity_error(
+                "audit JSONL integrity check failed: hash does not match",
+                line_number,
+                Some(event.sequence),
+            ));
+        }
+        first_sequence.get_or_insert(event.sequence);
+        last_sequence = Some(event.sequence);
+        event_count += 1;
+        previous = Some(event);
+    }
+    Ok(AuditVerifyResult {
+        valid: true,
+        event_count,
+        first_sequence,
+        last_sequence,
+        last_hash: previous.map(|event| event.hash),
+    })
+}
+
+pub(crate) fn replace_with_events(
+    path: &std::path::Path,
+    events: &[JsonlEvent],
+) -> Result<(), crate::error::AppError> {
+    use std::io::Write as _;
+
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("audit.jsonl");
+    let temporary_path = path.with_file_name(format!(".{file_name}.tmp-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary_path)
+            .map_err(|_| crate::error::AppError::AuditOperation {
+                operation: "rebuild",
+            })?;
+        for event in events {
+            file.write_all(event.line.as_bytes())
+                .and_then(|()| file.write_all(b"\n"))
+                .map_err(|_| crate::error::AppError::AuditOperation {
+                    operation: "rebuild",
+                })?;
+        }
+        file.sync_data()
+            .map_err(|_| crate::error::AppError::AuditOperation {
+                operation: "rebuild",
+            })?;
+        drop(file);
+        verify_path(&temporary_path)?;
+        std::fs::rename(&temporary_path, path).map_err(|_| {
+            crate::error::AppError::AuditOperation {
+                operation: "rebuild",
+            }
+        })?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary_path);
+    }
+    result
+}
+
+pub(crate) fn archive_path(
+    path: &std::path::Path,
+    timestamp: chrono::DateTime<chrono::Utc>,
+) -> std::path::PathBuf {
+    let stem = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("audit");
+    let timestamp = format!(
+        "{}.{:09}Z",
+        timestamp.format("%Y%m%dT%H%M%S"),
+        timestamp.timestamp_subsec_nanos()
+    );
+    path.with_file_name(format!("{stem}.{timestamp}.jsonl"))
+}
+
+fn integrity_error(message: &str, line: usize, sequence: Option<i64>) -> crate::error::AppError {
+    crate::error::AppError::AuditIntegrity {
+        message: message.to_owned(),
+        line: Some(line),
+        sequence,
+    }
+}
+
 pub(crate) fn read_existing(
     file: &mut std::fs::File,
 ) -> Result<std::collections::BTreeMap<i64, ExistingJsonlEvent>, crate::error::AppError> {

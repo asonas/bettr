@@ -578,6 +578,8 @@ fn status_code(error: &crate::error::AppError) -> u16 {
         | crate::error::AppError::ProjectNameConflict => 409,
         crate::error::AppError::Internal(_)
         | crate::error::AppError::DatabaseAlreadyInitialized
+        | crate::error::AppError::AuditIntegrity { .. }
+        | crate::error::AppError::AuditOperation { .. }
         | crate::error::AppError::SelfUpdateFailed(_) => 500,
     }
 }

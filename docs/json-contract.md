@@ -126,6 +126,14 @@ Human history and audit output renders the same instants in the machine's local 
 
 Each `audit list --json` event includes `changed_fields`, an ordered array of allowlisted field names. It never contains field values. Read operations and failed operations return an empty array. For example, an Issue edit that changes a title and priority returns `"changed_fields":["title","priority"]`; transition events name `state` and the applicable metadata fields without exposing reasons, summaries, verification text, Issue bodies, or comment bodies.
 
+## Audit JSONL operations
+
+`audit verify --json` checks the active database-adjacent JSONL file. Use `--path PATH` to verify one archived generation. It validates schema version 1, complete newline-delimited JSON objects, contiguous sequences within the file, unique event IDs, each SHA-256 hash, and each `previous_hash` link. Success data contains `valid`, `event_count`, `first_sequence`, and `last_sequence`.
+
+`audit archive --json` atomically moves a valid active JSONL file to a UTC timestamped generation and creates a new active file. The SQLite cursor is preserved, so the next automatically projected event continues from the archived tail hash. `audit rebuild --json` regenerates the complete active file from SQLite `audit_events` through a temporary verified file, then updates `audit_jsonl_cursor` in the same transaction. A failed rebuild leaves the previous active file in place.
+
+Integrity failures use `error.code: "audit_integrity_failure"` and exit code 10. File-operation failures use `error.code: "audit_operation_failed"` and exit code 10. Integrity error details may contain `line` and `sequence`, plus the fixed recovery instruction `preserve the affected JSONL and run bettr audit rebuild --json`; they never contain raw command arguments or file contents.
+
 ## Issue references
 
 Human-facing Issue references use `PROJECT#NUMBER`, for example `bettr#1`. Numbers are positive and allocated independently within each project, so `alpha#1` and `beta#1` identify different Issues. Phase 1 commands pass the parts separately:
@@ -145,7 +153,7 @@ JSON Issue objects also include the immutable Issue UUID in `id`, the immutable 
 | 3 | Project, Issue, or initialized database not found | `not_found`, `database_not_initialized` |
 | 4 | State, name, revision, or idempotency conflict | `invalid_transition`, `project_name_conflict`, `revision_conflict`, `idempotency_conflict` |
 | 5 | SQLite remained busy beyond the configured wait | `database_busy` |
-| 10 | Internal failure | `internal_error` |
+| 10 | Internal or audit integrity/operation failure | `internal_error`, `audit_integrity_failure`, `audit_operation_failed` |
 
 When a command that requires an initialized database selects an existing SQLite file without the bettr application ID, the identity preflight rejects it with exit 3:
 
@@ -161,17 +169,17 @@ When a command that requires an initialized database selects an existing SQLite 
 
 For normal local use, bettr verifies that the selected path resolves to a regular file and checks its header without opening SQLite, then rechecks the identity on the opened connection before enabling connection settings. A known older bettr database schema is migrated in a single transaction before the command continues. This protects an unrelated SQLite database from accidental path selection without changing its existing bytes or creating SQLite sidecars during the header preflight.
 
-The SQLite database schema version is independent from the JSON response `schema_version`. The current database schema version is 5; versions 1 through 4 are migrated automatically and their applied versions are recorded in `schema_migrations`. A bettr database with an unknown schema version is rejected before SQLite is opened for writing and exits 2:
+The SQLite database schema version is independent from the JSON response `schema_version`. The current database schema version is 7; versions 1 through 6 are migrated automatically and their applied versions are recorded in `schema_migrations`. A bettr database with an unknown schema version is rejected before SQLite is opened for writing and exits 2:
 
 ```json
 {
   "schema_version": 1,
   "error": {
     "code": "unsupported_database_schema_version",
-    "message": "database schema version 99 is unsupported; current version is 5",
+    "message": "database schema version 99 is unsupported; current version is 7",
     "details": {
       "found_version": 99,
-      "current_version": 5
+      "current_version": 7
     }
   }
 }

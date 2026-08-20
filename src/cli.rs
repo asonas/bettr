@@ -95,6 +95,9 @@ impl AuditInvocation {
             ("issue", _) => "issue",
             ("status", _) => "status",
             ("audit", Some("list")) => "audit_list",
+            ("audit", Some("verify")) => "audit_verify",
+            ("audit", Some("archive")) => "audit_archive",
+            ("audit", Some("rebuild")) => "audit_rebuild",
             ("audit", _) => "audit",
             ("context", _) => "context",
             ("self-update", _) => "self_update",
@@ -518,6 +521,9 @@ pub struct AuditCommand {
 #[derive(clap::Subcommand, Debug)]
 pub enum AuditSubcommand {
     List(AuditListCommand),
+    Verify(AuditVerifyCommand),
+    Archive(AuditArchiveCommand),
+    Rebuild(AuditRebuildCommand),
 }
 
 #[derive(clap::Args, Debug)]
@@ -546,6 +552,18 @@ pub struct AuditListCommand {
     #[arg(long, value_parser = parse_timestamp)]
     pub before: Option<chrono::DateTime<chrono::Utc>>,
 }
+
+#[derive(clap::Args, Debug)]
+pub struct AuditVerifyCommand {
+    #[arg(long, value_name = "PATH")]
+    pub path: Option<std::path::PathBuf>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AuditArchiveCommand {}
+
+#[derive(clap::Args, Debug)]
+pub struct AuditRebuildCommand {}
 
 #[derive(clap::Args, Debug)]
 pub struct ContextCommand {}

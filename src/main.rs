@@ -562,6 +562,44 @@ fn run(
                         crate::output::OutputMode::Json => crate::output::write_success(events),
                     }
                 }
+                crate::cli::AuditSubcommand::Verify(command) => {
+                    let path = command
+                        .path
+                        .unwrap_or_else(|| crate::store::jsonl::path_for_database(&database_path));
+                    let result = app.verify_audit_jsonl(&path)?;
+                    match output_mode {
+                        crate::output::OutputMode::Human => println!(
+                            "verified {} events (sequences {:?}..{:?})",
+                            result.event_count, result.first_sequence, result.last_sequence
+                        ),
+                        crate::output::OutputMode::Json => crate::output::write_success(result),
+                    }
+                }
+                crate::cli::AuditSubcommand::Archive(_) => {
+                    let path = crate::store::jsonl::path_for_database(&database_path);
+                    let result = app.archive_audit_jsonl(&path)?;
+                    match output_mode {
+                        crate::output::OutputMode::Human => {
+                            if let Some(archive_path) = &result.archive_path {
+                                println!("archived {}", archive_path.display());
+                            } else {
+                                println!("active audit JSONL is empty");
+                            }
+                        }
+                        crate::output::OutputMode::Json => crate::output::write_success(result),
+                    }
+                }
+                crate::cli::AuditSubcommand::Rebuild(_) => {
+                    let path = crate::store::jsonl::path_for_database(&database_path);
+                    let result = app.rebuild_audit_jsonl(&path)?;
+                    match output_mode {
+                        crate::output::OutputMode::Human => println!(
+                            "rebuilt {} events (sequences {:?}..{:?})",
+                            result.event_count, result.first_sequence, result.last_sequence
+                        ),
+                        crate::output::OutputMode::Json => crate::output::write_success(result),
+                    }
+                }
             }
             Ok(())
         }

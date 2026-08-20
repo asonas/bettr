@@ -382,6 +382,95 @@ impl App {
         }
     }
 
+    pub fn verify_audit_jsonl(
+        &mut self,
+        path: &std::path::Path,
+    ) -> Result<crate::store::jsonl::AuditVerifyResult, crate::error::AppError> {
+        self.run_audit_tool(
+            "audit_verify",
+            |_| crate::store::jsonl::verify_path(path),
+            |result| {
+                serde_json::json!({
+                    "event_count": result.event_count,
+                    "first_sequence": result.first_sequence,
+                    "last_sequence": result.last_sequence,
+                    "valid": result.valid,
+                })
+                .to_string()
+            },
+        )
+    }
+
+    pub fn archive_audit_jsonl(
+        &mut self,
+        path: &std::path::Path,
+    ) -> Result<crate::store::jsonl::AuditArchiveResult, crate::error::AppError> {
+        self.run_audit_tool(
+            "audit_archive",
+            |database| database.archive_audit_jsonl(path),
+            |result| serde_json::json!({ "archived": result.archived }).to_string(),
+        )
+    }
+
+    pub fn rebuild_audit_jsonl(
+        &mut self,
+        path: &std::path::Path,
+    ) -> Result<crate::store::jsonl::AuditRebuildResult, crate::error::AppError> {
+        self.run_audit_tool(
+            "audit_rebuild",
+            |database| database.rebuild_audit_jsonl(path),
+            |result| {
+                serde_json::json!({
+                    "event_count": result.event_count,
+                    "first_sequence": result.first_sequence,
+                    "last_sequence": result.last_sequence,
+                    "rebuilt": result.rebuilt,
+                })
+                .to_string()
+            },
+        )
+    }
+
+    fn run_audit_tool<T, F, M>(
+        &mut self,
+        operation: &str,
+        action: F,
+        metadata: M,
+    ) -> Result<T, crate::error::AppError>
+    where
+        F: FnOnce(&mut crate::store::Database) -> Result<T, crate::error::AppError>,
+        M: FnOnce(&T) -> String,
+    {
+        let started_at = chrono::Utc::now();
+        let context = crate::domain::ExecutionContext::resolve()?;
+        match action(&mut self.database) {
+            Ok(result) => {
+                let metadata_json = metadata(&result);
+                self.database.record_successful_operation_with_metadata(
+                    operation,
+                    &context,
+                    &crate::store::AuditSubject::default(),
+                    &[],
+                    started_at,
+                    &metadata_json,
+                )?;
+                Ok(result)
+            }
+            Err(error) => {
+                if let Err(audit_error) = self.database.record_failed_operation(
+                    operation,
+                    &context,
+                    &error,
+                    &crate::store::AuditSubject::default(),
+                    started_at,
+                ) {
+                    return Err(Self::failure_audit_error(operation, &error, &audit_error));
+                }
+                Err(error)
+            }
+        }
+    }
+
     pub fn record_context_inspection(&mut self) -> Result<(), crate::error::AppError> {
         let started_at = chrono::Utc::now();
         let context = crate::domain::ExecutionContext::resolve()?;

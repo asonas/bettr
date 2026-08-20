@@ -52,6 +52,21 @@ pub fn write_error(mode: OutputMode, error: &crate::error::AppError) {
                 crate::error::AppError::SelfUpdateFailed(report) => {
                     error_value["error"]["details"] = report.clone();
                 }
+                crate::error::AppError::AuditIntegrity { line, sequence, .. } => {
+                    error_value["error"]["details"] = serde_json::json!({
+                        "line": line,
+                        "sequence": sequence,
+                        "recovery":
+                            "preserve the affected JSONL and run bettr audit rebuild --json",
+                    });
+                }
+                crate::error::AppError::AuditOperation { operation } => {
+                    error_value["error"]["details"] = serde_json::json!({
+                        "operation": operation,
+                        "recovery":
+                            "preserve the affected JSONL and retry, or run bettr audit rebuild --json",
+                    });
+                }
                 _ => {}
             }
             eprintln!("{error_value}");

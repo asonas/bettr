@@ -43,4 +43,20 @@ fn help_names_the_product_and_core_commands() {
         .assert()
         .success()
         .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+
+    Command::cargo_bin("bettr")
+        .unwrap()
+        .args(["audit", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("verify"))
+        .stdout(predicate::str::contains("archive"))
+        .stdout(predicate::str::contains("rebuild"));
+
+    Command::cargo_bin("bettr")
+        .unwrap()
+        .args(["audit", "verify", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--path"));
 }

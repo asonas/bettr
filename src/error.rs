@@ -22,6 +22,14 @@ pub enum AppError {
     ProjectNameConflict,
     DatabaseBusy(String),
     Internal(String),
+    AuditIntegrity {
+        message: String,
+        line: Option<usize>,
+        sequence: Option<i64>,
+    },
+    AuditOperation {
+        operation: &'static str,
+    },
     DatabaseAlreadyInitialized,
     DatabaseNotInitialized,
     UnsupportedDatabaseSchemaVersion {
@@ -42,7 +50,9 @@ impl AppError {
             | Self::RevisionConflict { .. } => ExitCode::Conflict,
             Self::ProjectNameConflict => ExitCode::Conflict,
             Self::DatabaseBusy(_) => ExitCode::DatabaseBusy,
-            Self::Internal(_) => ExitCode::Internal,
+            Self::Internal(_) | Self::AuditIntegrity { .. } | Self::AuditOperation { .. } => {
+                ExitCode::Internal
+            }
             Self::DatabaseAlreadyInitialized => ExitCode::InvalidInput,
             Self::DatabaseNotInitialized => ExitCode::NotFound,
             Self::UnsupportedDatabaseSchemaVersion { .. } => ExitCode::InvalidInput,
@@ -61,6 +71,8 @@ impl AppError {
             Self::ProjectNameConflict => "project_name_conflict",
             Self::DatabaseBusy(_) => "database_busy",
             Self::Internal(_) => "internal_error",
+            Self::AuditIntegrity { .. } => "audit_integrity_failure",
+            Self::AuditOperation { .. } => "audit_operation_failed",
             Self::DatabaseAlreadyInitialized => "database_already_initialized",
             Self::DatabaseNotInitialized => "database_not_initialized",
             Self::UnsupportedDatabaseSchemaVersion { .. } => "unsupported_database_schema_version",
@@ -78,6 +90,10 @@ impl std::fmt::Display for AppError {
             | Self::InvalidTransition(message)
             | Self::DatabaseBusy(message)
             | Self::Internal(message) => formatter.write_str(message),
+            Self::AuditIntegrity { message, .. } => formatter.write_str(message),
+            Self::AuditOperation { operation } => {
+                write!(formatter, "audit {operation} operation failed")
+            }
             Self::IdempotencyConflict => formatter.write_str(
                 "idempotency key has already been used with a different operation or payload",
             ),

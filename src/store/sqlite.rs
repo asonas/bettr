@@ -2921,6 +2921,181 @@ impl Database {
         transaction.commit().map_err(crate::error::AppError::from)
     }
 
+    pub(crate) fn archive_audit_jsonl(
+        &mut self,
+        path: &std::path::Path,
+    ) -> Result<crate::store::jsonl::AuditArchiveResult, crate::error::AppError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::AppError::from)?;
+        let (cursor_sequence, cursor_hash): (i64, Option<String>) = transaction
+            .query_row(
+                "SELECT sequence, previous_hash FROM audit_jsonl_cursor WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(crate::error::AppError::from)?;
+
+        let active_metadata = match std::fs::metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .truncate(false)
+                    .write(true)
+                    .open(path)
+                    .map_err(|_| crate::error::AppError::AuditOperation {
+                        operation: "archive",
+                    })?;
+                file.sync_data()
+                    .map_err(|_| crate::error::AppError::AuditOperation {
+                        operation: "archive",
+                    })?;
+                transaction.commit().map_err(crate::error::AppError::from)?;
+                return Ok(crate::store::jsonl::AuditArchiveResult {
+                    archived: false,
+                    archive_path: None,
+                });
+            }
+            Err(_) => {
+                return Err(crate::error::AppError::AuditOperation {
+                    operation: "archive",
+                });
+            }
+        };
+        if active_metadata.len() == 0 {
+            transaction.commit().map_err(crate::error::AppError::from)?;
+            return Ok(crate::store::jsonl::AuditArchiveResult {
+                archived: false,
+                archive_path: None,
+            });
+        }
+
+        let verification = crate::store::jsonl::verify_path(path)?;
+        if verification.last_sequence != Some(cursor_sequence)
+            || verification.last_hash != cursor_hash
+        {
+            return Err(crate::error::AppError::AuditIntegrity {
+                message: "audit JSONL integrity check failed: active file disagrees with cursor"
+                    .to_owned(),
+                line: verification.event_count.checked_add(1),
+                sequence: verification.last_sequence,
+            });
+        }
+
+        let mut archive_path = crate::store::jsonl::archive_path(path, chrono::Utc::now());
+        while archive_path.exists() {
+            let file_name = archive_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("audit.archive.jsonl");
+            archive_path = archive_path.with_file_name(format!(
+                "{}-{}.jsonl",
+                file_name.trim_end_matches(".jsonl"),
+                uuid::Uuid::new_v4()
+            ));
+        }
+        std::fs::rename(path, &archive_path).map_err(|_| {
+            crate::error::AppError::AuditOperation {
+                operation: "archive",
+            }
+        })?;
+        let create_active = (|| {
+            let file = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(path)
+                .map_err(|_| crate::error::AppError::AuditOperation {
+                    operation: "archive",
+                })?;
+            file.sync_data()
+                .map_err(|_| crate::error::AppError::AuditOperation {
+                    operation: "archive",
+                })
+        })();
+        if let Err(error) = create_active {
+            let _ = std::fs::rename(&archive_path, path);
+            return Err(error);
+        }
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(crate::store::jsonl::AuditArchiveResult {
+            archived: true,
+            archive_path: Some(archive_path),
+        })
+    }
+
+    pub(crate) fn rebuild_audit_jsonl(
+        &mut self,
+        path: &std::path::Path,
+    ) -> Result<crate::store::jsonl::AuditRebuildResult, crate::error::AppError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::AppError::from)?;
+        let mut statement = transaction
+            .prepare(
+                "SELECT sequence, id, started_at, finished_at, operation, success, exit_code,
+                        initiator_kind, initiator_name, session_id, project_id,
+                        target_type, target_id, revision, changed_fields_json, metadata_json
+                 FROM audit_events
+                 ORDER BY sequence",
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut rows = statement.query([]).map_err(crate::error::AppError::from)?;
+        let mut events = Vec::new();
+        let mut expected_sequence = 1_i64;
+        let mut previous_hash = None;
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
+            let source_event = crate::store::jsonl::SourceAuditEvent::from_row(row)?;
+            if source_event.sequence != expected_sequence {
+                return Err(crate::error::AppError::AuditIntegrity {
+                    message:
+                        "audit JSONL integrity check failed: SQLite sequence is not contiguous"
+                            .to_owned(),
+                    line: Some(events.len() + 1),
+                    sequence: Some(source_event.sequence),
+                });
+            }
+            let event = source_event
+                .to_jsonl(previous_hash.as_deref())
+                .map_err(|_| crate::error::AppError::AuditIntegrity {
+                    message:
+                        "audit JSONL integrity check failed: SQLite event cannot be serialized"
+                            .to_owned(),
+                    line: Some(events.len() + 1),
+                    sequence: Some(source_event.sequence),
+                })?;
+            expected_sequence += 1;
+            previous_hash = Some(event.hash.clone());
+            events.push(event);
+        }
+        drop(rows);
+        drop(statement);
+
+        crate::store::jsonl::replace_with_events(path, &events)?;
+        let last_sequence = events.last().map_or(0, |event| event.sequence);
+        transaction
+            .execute(
+                "UPDATE audit_jsonl_cursor
+                 SET sequence = ?1, previous_hash = ?2, updated_at = ?3
+                 WHERE id = 1",
+                rusqlite::params![
+                    last_sequence,
+                    previous_hash,
+                    chrono::Utc::now().to_rfc3339()
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(crate::store::jsonl::AuditRebuildResult {
+            rebuilt: true,
+            event_count: events.len(),
+            first_sequence: events.first().map(|event| event.sequence),
+            last_sequence: events.last().map(|event| event.sequence),
+        })
+    }
+
     pub fn record_successful_operation(
         &mut self,
         operation: &str,
@@ -2928,6 +3103,25 @@ impl Database {
         subject: &AuditSubject,
         changed_fields: &[&str],
         started_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::error::AppError> {
+        self.record_successful_operation_with_metadata(
+            operation,
+            context,
+            subject,
+            changed_fields,
+            started_at,
+            "{}",
+        )
+    }
+
+    pub(crate) fn record_successful_operation_with_metadata(
+        &mut self,
+        operation: &str,
+        context: &crate::domain::ExecutionContext,
+        subject: &AuditSubject,
+        changed_fields: &[&str],
+        started_at: chrono::DateTime<chrono::Utc>,
+        metadata_json: &str,
     ) -> Result<(), crate::error::AppError> {
         if !self.audit_enabled {
             return Ok(());
@@ -2952,7 +3146,7 @@ impl Database {
                 started_at,
                 exit_code: 0,
                 changed_fields,
-                metadata_json: "{}",
+                metadata_json,
             },
         )?;
         transaction.commit().map_err(crate::error::AppError::from)
