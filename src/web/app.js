@@ -66,9 +66,17 @@ export function createWebController({
 
   function issueKey(issue) { return `${issue.project}#${issue.number}`; }
 
+  function copyIcon() {
+    return `<svg class="copy-key-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="5" y="1.5" width="8.5" height="10.5" rx="1.5"></rect><path d="M3.5 4.5H3A1.5 1.5 0 0 0 1.5 6v7A1.5 1.5 0 0 0 3 14.5h7A1.5 1.5 0 0 0 11.5 13v-.5"></path></svg>`;
+  }
+
+  function copiedIcon() {
+    return `<svg class="copy-key-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m2.5 8.25 3.25 3.25 7.75-7.5"></path></svg>`;
+  }
+
   function copyIssueButton(key) {
     const escapedKey = escapeHtml(key);
-    return `<button class="copy-key-button" type="button" data-copy-key="${escapedKey}" aria-label="Copy ${escapedKey}">Copy</button>`;
+    return `<button class="copy-key-button" type="button" data-copy-key="${escapedKey}" aria-label="Copy ${escapedKey}">${copyIcon()}</button>`;
   }
 
   function waitSummary(item) {
@@ -447,21 +455,24 @@ export function createWebController({
     copyFeedback.classList.toggle("is-error", isError);
   }
 
+  function setCopyButtonState(button, key, copied) {
+    button.dataset.copied = copied ? "true" : "false";
+    button.innerHTML = copied ? copiedIcon() : copyIcon();
+    button.setAttribute("aria-label", `${copied ? "Copied" : "Copy"} ${key}`);
+  }
+
   async function copyIssueKey(key, button) {
     try {
       if (!clipboard?.writeText) throw new Error("Clipboard unavailable");
       await clipboard.writeText(key);
-      button.textContent = "Copied";
-      button.setAttribute("aria-label", `Copied ${key}`);
+      setCopyButtonState(button, key, true);
       announceCopy(`Copied ${key}`);
       window.setTimeout(() => {
         if (!button.isConnected) return;
-        button.textContent = "Copy";
-        button.setAttribute("aria-label", `Copy ${key}`);
+        setCopyButtonState(button, key, false);
       }, 1400);
     } catch {
-      button.textContent = "Copy";
-      button.setAttribute("aria-label", `Copy ${key}`);
+      setCopyButtonState(button, key, false);
       announceCopy(`Unable to copy ${key}`, true);
     }
   }

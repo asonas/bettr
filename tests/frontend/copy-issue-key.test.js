@@ -15,7 +15,10 @@ describe("Issue key copy actions", () => {
 
     window.location.hash = "";
     await controller.pollStatus();
-    getByRole(document, "button", { name: "Copy bettr#1" }).click();
+    const copyButton = getByRole(document, "button", { name: "Copy bettr#1" });
+    expect(copyButton.textContent).toBe("");
+    expect(copyButton.querySelector("svg.copy-key-icon")).toBeTruthy();
+    copyButton.click();
 
     await vi.waitFor(() => expect(clipboard.writeText).toHaveBeenCalledWith("bettr#1"));
     expect(window.location.hash).toBe("");
