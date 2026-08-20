@@ -1,305 +1,115 @@
 # bettr
 
-bettr is a local, non-interactive Issue tracker for agent work. It stores projects, Issues, comments, coordination state, execution context, and audit events in SQLite. Phase 2 supports macOS and Linux.
+bettr is a local, non-interactive issue tracker for work shared by people and agents. It stores projects and Issues in SQLite and provides a CLI, JSON output, and a loopback-only web UI.
+
+## What it can do
+
+| Area | Capabilities |
+| --- | --- |
+| Projects and Issues | Create, edit, list, show, assign, comment on, and transition Issues across five states: `todo`, `in_progress`, `blocked`, `done`, and `cancelled`. |
+| Coordination | Claim Issues, manage leases, send heartbeats, take over stale work, and connect Issues with dependencies or one-level parent relations. |
+| Human decisions | Ask for a human decision, record the answer, and apply the selected next state. |
+| History and supervision | Review comments, Issue history, cross-project status, and audit records. |
+| Automation | Use versioned `--json` output, retry-safe idempotency keys, atomic JSON batches, event cursors, and capability discovery. |
+| Web UI | Browse projects in a Kanban board, inspect Issue details, follow activity, and resolve existing human decisions. |
 
 ## Install
 
-Install the current checkout with Cargo:
+### From source
 
 ```sh
 cargo install --path .
 ```
 
-### Release binaries
+### Release binary
 
-Tagged GitHub Releases provide versioned native binaries for:
+Download a versioned archive for macOS or Linux from [GitHub Releases](https://github.com/asonas/bettr/releases). A versioned download URL has the form `https://github.com/asonas/bettr/releases/download/v<VERSION>/...`.
 
-| Platform | Target |
-| --- | --- |
-| Linux x86_64 | `x86_64-unknown-linux-gnu` |
-| Linux arm64 | `aarch64-unknown-linux-gnu` |
-| macOS x86_64 | `x86_64-apple-darwin` |
-| macOS arm64 | `aarch64-apple-darwin` |
-
-Choose a fixed version and target, then download the matching archive and its
-checksum sidecar. The Release also contains a combined `SHA256SUMS` manifest.
+Verify the archive with its checksum and, when required, its GitHub attestation. Releases include a combined `SHA256SUMS` manifest. For example:
 
 ```sh
-VERSION=0.1.0
-TARGET=x86_64-unknown-linux-gnu
-ASSET="bettr-${VERSION}-${TARGET}.tar.gz"
-BASE="https://github.com/asonas/bettr/releases/download/v${VERSION}"
-TMP_DIR=$(mktemp -d)
-trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
-
-curl -fsSLo "$TMP_DIR/$ASSET" "$BASE/$ASSET"
-curl -fsSLo "$TMP_DIR/$ASSET.sha256" "$BASE/$ASSET.sha256"
-(
-  cd "$TMP_DIR"
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum -c "$ASSET.sha256"
-  else
-    shasum -a 256 -c "$ASSET.sha256"
-  fi
-  tar -xzf "$ASSET"
-  ./bettr --version
-)
+gh attestation verify bettr-<version>-<target>.tar.gz --repo asonas/bettr
 ```
 
-For a provenance check on a public Release, install the GitHub CLI and run:
+Place the extracted `bettr` binary on `PATH`. When upgrading, keep the previous binary as `.prev` until the new version passes its startup check.
 
-```sh
-gh attestation verify "$TMP_DIR/$ASSET" --repo asonas/bettr
-```
+## Initialize bettr
 
-To install or upgrade after verification, place the extracted binary in a
-directory on `PATH`. Keep the previous binary beside it as `.prev` so a failed
-post-upgrade check can be rolled back:
-
-```sh
-INSTALL_DIR="${BETTR_INSTALL_DIR:-$HOME/.local/bin}"
-INSTALL_PATH="$INSTALL_DIR/bettr"
-mkdir -p "$INSTALL_DIR"
-install -m 755 "$TMP_DIR/bettr" "$INSTALL_PATH.new"
-if [ -e "$INSTALL_PATH" ]; then
-  mv "$INSTALL_PATH" "$INSTALL_PATH.prev"
-fi
-mv "$INSTALL_PATH.new" "$INSTALL_PATH"
-"$INSTALL_PATH" --version
-```
-
-If the new binary cannot start, restore the previous version with
-`mv "$INSTALL_PATH.prev" "$INSTALL_PATH"`. The release workflow refuses to
-overwrite an existing Release tag. Homebrew packages, OS-native installers,
-automatic updates, and developer-managed signing keys are outside this
-distribution path.
-
-Initialize the database explicitly before using it:
+Create the local database before using commands that read or write it:
 
 ```sh
 bettr init
 ```
 
-By default, bettr stores data at:
+The default database locations are:
 
-- macOS: `~/Library/Application Support/bettr/bettr.db`
-- Linux: `${XDG_DATA_HOME:-~/.local/share}/bettr/bettr.db`
+| Platform | Location |
+| --- | --- |
+| macOS | `~/Library/Application Support/bettr/bettr.db` |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/bettr/bettr.db` |
 
-Use `--database /absolute/path/to/bettr.db` or `BETTR_DATABASE` to select another SQLite file. Run `bettr context --json` to inspect the resolved database and project without creating a database.
+Use `--database /absolute/path/to/bettr.db` or `BETTR_DATABASE` to select another database. Use `bettr context --json` to inspect the resolved database and project without creating a database.
 
-### Database safety boundary
-
-For normal local use, bettr protects unrelated SQLite databases from accidental selection by commands that require an initialized database. Before those commands ask SQLite to open a path, bettr verifies that it resolves to a regular file, then reads its header without modifying it and checks the bettr application ID and a supported schema version. Older supported bettr schemas are migrated in a single transaction. After opening the database, bettr checks the identity again on that same connection before enabling connection settings such as WAL. If the identity preflight rejects an unrelated path, these commands return exit code 3 with `database_not_initialized`; an unknown bettr schema version returns exit code 2 with `unsupported_database_schema_version`. Existing file bytes are not changed and bettr does not create `-wal`, `-shm`, or `-journal` sidecars during the header preflight.
-
-`bettr init` and `bettr context` have separate contracts. `init` refuses any existing path with exit code 2 and `database_already_initialized`. For an unrelated SQLite path, `context` reports the resolved path without requiring a valid bettr database and exits 0; it does not create or change the database.
-
-This is an MVP safeguard against accidental selection, not a complete defense against a hostile local process. Deliberate replacement of the selected path during the identity-check/open window is outside the MVP guarantee.
-
-## Shortest workflow
+## Quick start
 
 Create a project and an Issue:
 
 ```sh
 bettr project create bettr
-bettr issue create --project bettr --title "Document Phase 1" --priority critical
+bettr issue create --project bettr --title "Document the workflow" --priority high
 ```
 
-The new Issue is `bettr#1` at revision 1. Assignment is an optimistic, revision-guarded edit; every successful edit or state transition returns the next revision:
+Work on the Issue and inspect the result:
 
 ```sh
-bettr issue edit 1 --project bettr --revision 1 \
-  --assignee-kind agent --assignee-name codex
-bettr issue start 1 --project bettr --revision 2
+bettr issue start 1 --project bettr --revision 1
 bettr issue comment 1 --project bettr --body "Implementation is ready for review"
-bettr issue block 1 --project bettr --revision 3 \
-  --reason "Waiting for review" --wait-kind human
-bettr issue resume 1 --project bettr --revision 4
-bettr issue complete 1 --project bettr --revision 5 \
-  --summary "Phase 1 documented" --verification "cargo test passed"
-```
-
-Inspect the result across all projects or review the Issue history:
-
-```sh
+bettr issue complete 1 --project bettr --revision 2 \
+  --summary "Workflow documented" --verification "cargo test passed"
 bettr status
-bettr issue history 1 --project bettr
-bettr audit list
 ```
 
-## Local web UI
+Edits and state transitions require the current `--revision`. A stale revision fails instead of overwriting a newer update.
 
-Start the loopback-only web view:
+## Web UI
+
+Start the local web view:
 
 ```sh
 bettr web
 ```
 
-Then open the URL printed by bettr, usually `http://127.0.0.1:4242`. Use
-`--port 0` when an available port should be selected automatically. The
-server never binds to a non-loopback address. The UI is primarily a read view;
-the only write route resolves an existing human decision through the same
-state, revision, permission, and audit contract as the CLI. Issue edits,
-claims, comments, and other mutations remain CLI operations.
+Open the URL printed by bettr, usually `http://127.0.0.1:4242`. Use `--port 0` to select an available port.
 
-Projects opens a five-column Kanban board for Todo, In progress, Blocked,
-Done, and Cancelled. The sidebar lists projects directly; selecting one
-filters the board and selecting a card opens a URL-addressable detail view
-with its activity, waiting context, dependencies, and decision requests. An
-open human decision has its question, background, current revision, and a
-state-specific answer form; submitting the form resolves only that existing
-decision. The browser polls the local API, moves changed Issues to their
-current status column, and marks updated cards with a cyan edge until they are
-opened. The header exposes a compact dropdown for reviewing those updated
-Issues.
+The web UI provides a project sidebar, a five-column Kanban board, Issue details, activity, waiting context, dependencies, and decision requests. It is loopback-only and read-focused: it can resolve an existing human decision, while Issue edits, claims, comments, and other changes remain CLI operations.
 
-For an open human decision, the detail view shows the question, background,
-waiting context, and current revision, then exposes one answer form per
-request. The form uses `POST /api/decisions/<request-uuid>/resolve` with the
-displayed `expected_revision` and only the valid next states `todo`, `blocked`,
-`done`, or `cancelled`. Required transition fields are `reason` and
-`wait_kind` for `blocked`, `summary` and `verification` for `done`, and
-`reason` for `cancelled`; a revision conflict or unknown outcome requires
-reloading the Issue before submitting again. The route is loopback-only,
-human-context-only, and has no public authentication or external bind; JSONL
-audit export remains outside this feature.
+## Automation and agents
 
-The production server still serves embedded HTML, CSS, and Vanilla JavaScript
-assets and has no frontend runtime dependency. Frontend behavior is tested
-separately with Vitest and jsdom:
-
-```sh
-npm install
-npm test
-```
-
-Rust tests cover the loopback HTTP server, embedded asset delivery, and JSON
-API contracts; the npm suite covers DOM rendering, polling, navigation, focus
-behavior, and the state projection contract.
-
-Use the revision returned by the previous write. A stale revision fails with exit code 4 instead of overwriting another process's update.
-
-## JSON and execution context
-
-Add `--json` to any command to receive the versioned machine-readable envelope described in [the JSON contract](docs/json-contract.md):
+Add `--json` to receive the versioned machine-readable response used by scripts:
 
 ```sh
 bettr issue show 1 --project bettr --json
 bettr status --json
 ```
 
-Agent callers should identify themselves through the environment. `BETTR_SESSION_ID` is optional when `BETTR_AGENT` is set:
+Identify an agent and session when coordinating work:
 
 ```sh
 BETTR_AGENT=codex BETTR_SESSION_ID=session-1 \
-  bettr issue comment 1 --project bettr --body "Tests pass" --json
-```
-
-Human automation can set `BETTR_OPERATOR`; otherwise bettr uses the OS username:
-
-```sh
-BETTR_OPERATOR=reviewer bettr issue resume 1 --project bettr --revision 4
-```
-
-### Retry-safe writes and JSON batches
-
-Pass the optional global `--idempotency-key <key>` to make a successful write
-safe to retry. The same key replays the stored JSON result only when the
-operation and canonical request payload match. Reusing a key with a different
-request returns `idempotency_conflict` with exit code 4; failed writes are not
-memoized.
-
-Issue mutations can also be executed atomically from a JSON array:
-
-```sh
-bettr issue batch --project bettr --input batch.json --json
-bettr --idempotency-key batch-20260820 issue batch \
-  --project bettr --input - --json <<'JSON'
-[{"operation":"issue_create","title":"First issue"}]
-JSON
-```
-
-Use `--input -` for stdin. The batch supports `issue_create`, `issue_edit`,
-`issue_comment`, `issue_start`, `issue_block`, `issue_resume`,
-`issue_complete`, `issue_cancel`, and `issue_reopen`; all operations commit or
-all roll back. An idempotency key replays the complete batch result.
-
-## Phase 2 coordination
-
-Discover the commands a caller may use before starting work:
-
-```sh
-bettr capabilities --json
-```
-
-Agent work uses a session lease. Claiming is atomic, heartbeat renews only the lease, and an expired lease remains visible as `stale` until a reasoned takeover:
-
-```sh
-export BETTR_AGENT=codex
-export BETTR_SESSION_ID=work-123
-bettr issue claim --project bettr --json
+  bettr issue claim --project bettr --json
 bettr issue heartbeat 1 --project bettr --json
-bettr issue takeover 1 --project bettr --reason "Previous session expired" --json
 ```
 
-Dependencies and one-level parents use structured references such as `bettr#12`:
+Use `--idempotency-key` for retry-safe writes and `issue batch --input <path> --json` for atomic JSON batches. Use `bettr capabilities --json` to discover the available coordination features.
 
-```sh
-bettr issue dependency add bettr#3 bettr#12 --json
-bettr issue parent set bettr#12 bettr#3 --json
-```
+The JSON response contract is documented in [`docs/json-contract.md`](docs/json-contract.md). Agent-specific workflows are documented in [`skills/bettr`](skills/bettr) and [`skills/bettr-claude`](skills/bettr-claude).
 
-When an agent needs a human choice, create a decision request and stop work on that Issue. A resolver records the answer and explicit next state:
+## Data and limits
 
-Use `todo` when the Issue needs to return to agent work; active `in_progress` state is entered through a new claim and lease.
-
-```sh
-bettr decision request 12 --project bettr \
-  --question "Which behavior is intended?" \
-  --background "The choice changes the rollout." --json
-BETTR_OPERATOR=reviewer bettr decision resolve <request-uuid> \
-  --answer "Use the safer behavior" --next-state todo --json
-```
-
-直接`blocked`にする場合は`--reason`と`--wait-kind`、`done`にする場合は`--summary`と`--verification`、`cancelled`にする場合は`--reason`を指定する。これらは対応するIssue遷移イベントを記録する。
-
-wayfinder-style consumers can persist an exclusive event cursor:
-
-```sh
-bettr event list --after <cursor> --limit 100 --include-issue --json
-```
-
-The Codex adapter is in [`skills/bettr`](skills/bettr), the Claude Code adapter is in [`skills/bettr-claude`](skills/bettr-claude), and a wayfinder integration example is in [`examples/wayfinder/phase2-workflow.md`](examples/wayfinder/phase2-workflow.md). Capability discovery advertises idempotency as available.
-
-`BETTR_PROJECT` supplies a default project. Project resolution is command argument, environment, nearest `.bettr.toml`, user config, then no default. User config is stored at `~/Library/Application Support/bettr/config.toml` on macOS and `${XDG_CONFIG_HOME:-~/.config}/bettr/config.toml` on Linux.
-
-## Codex skill
-
-The repository includes a `bettr` skill for agents that need to record work in the local Issue tracker. Once this repository is available on GitHub, install it with the Codex skill installer:
-
-```sh
-python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
-  --repo asonas/bettr --path skills/bettr --ref main
-```
-
-### Conversation updates
-
-When a conversation explicitly identifies a bettr Issue, the skill records a material decision, requirement change, discovery, risk, blocker, next action, or verification result as a comment before the response. It never infers an Issue number or creates an Issue. When evidence is unambiguous, it can also move `todo` to `in_progress`, `in_progress` to `blocked`, or `in_progress` to `done`; it never automatically cancels an Issue. Duplicate, ambiguous, unrelated, and updates to completed Issues are skipped. Users can explicitly opt out of recording an update.
-
-## Implemented scope
-
-Phase 1 provides projects, priorities (`critical`, `high`, `medium`, and `low`), five Issue states (`todo`, `in_progress`, `blocked`, `done`, and `cancelled`), immutable comments, revision-guarded edits, history, cross-project status, execution context, and SQLite audit events.
-
-The CLI does not start agents, share data over a network, or support external databases. JSONL audit export, backup and restore, redaction, and `doctor` diagnostics remain future work. See [`contracts/capabilities.json`](contracts/capabilities.json) for the machine-readable availability matrix.
-
-## Performance baseline
-
-Run the release-mode child-process latency baseline with:
-
-```sh
-cargo bench --bench cli_latency
-```
-
-The harness reports p50 and p95 for 1,000 `issue show` operations, 1,000 revision-guarded `issue edit` operations, and 50 selective `issue list` operations over 100,000 Issues. The large fixture starts from the CLI-initialized production schema and identity, then uses a deterministic bulk transaction for practical setup time. It reports measurements without enforcing the 50 ms or 200 ms targets in the normal test suite. Record machine information and results in release notes before publishing a performance claim.
+- bettr stores data locally in SQLite.
+- bettr does not start agents, share data over a network, or use external databases.
+- The web UI binds only to the loopback interface.
+- Backup and restore, redaction, and JSONL audit export are not currently available.
 
 ## License
 

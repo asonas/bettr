@@ -70,7 +70,9 @@ for required in \
   'gh attestation verify' \
   '/releases/download/v' \
   '.prev' \
-  'cargo install --path .' \
-  'skill-installer/scripts/install-skill-from-github.py'; do
+  'cargo install --path .'; do
   grep -Fq -- "$required" "$repo_root/README.md"
 done
+
+grep -Fq -- 'skill-installer/scripts/install-skill-from-github.py' \
+  "$repo_root/skills/bettr/SKILL.md"
