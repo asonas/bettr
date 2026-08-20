@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runs-on: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runs-on: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            runs-on: macos-15-intel
+          - target: aarch64-apple-darwin
+            runs-on: macos-14
+    runs-on: ${{ matrix.runs-on }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Add target
+        run: rustup target add "${{ matrix.target }}"
+      - name: Validate release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          package_version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "bettr") | .version')"
+          test -n "$package_version"
+          if [ "$tag_version" != "$package_version" ]; then
+            printf 'tag version %s does not match package version %s\n' "$tag_version" "$package_version" >&2
+            exit 1
+          fi
+          printf 'version=%s\n' "$tag_version" >> "$GITHUB_OUTPUT"
+      - name: Build release binary
+        run: cargo build --locked --release --target "${{ matrix.target }}"
+      - name: Verify binary version
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="target/${{ matrix.target }}/release/bettr"
+          test -x "$binary"
+          "$binary" --version | grep -F -- "${{ steps.version.outputs.version }}"
+      - name: Package and verify archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          scripts/package-release.sh \
+            "${{ steps.version.outputs.version }}" \
+            "${{ matrix.target }}" \
+            "target/${{ matrix.target }}/release/bettr" \
+            dist
+          scripts/verify-release.sh \
+            "dist/bettr-${{ steps.version.outputs.version }}-${{ matrix.target }}.tar.gz" \
+            "dist/bettr-${{ steps.version.outputs.version }}-${{ matrix.target }}.tar.gz.sha256" \
+            "${{ steps.version.outputs.version }}"
+      - name: Upload release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          retention-days: 7
+      - name: Attest release archive
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/*.tar.gz
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Download release archives
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: release-*
+          merge-multiple: true
+      - name: Verify archives and build checksum manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          for archive in release-assets/*.tar.gz; do
+            scripts/verify-release.sh "$archive" "$archive.sha256" "$version"
+          done
+          (
+            cd release-assets
+            find . -maxdepth 1 -type f -name '*.sha256' -print0 \
+              | sort -z \
+              | xargs -0 cat \
+              | LC_ALL=C sort -k2,2 > SHA256SUMS
+          )
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            printf 'release %s already exists\n' "$GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --generate-notes \
+            --title "bettr $GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            release-assets/*

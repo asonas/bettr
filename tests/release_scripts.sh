@@ -39,3 +39,28 @@ if grep -Fq 'contents: write' "$ci_workflow"; then
   printf 'CI workflow must not have contents: write\n' >&2
   exit 1
 fi
+
+release_workflow="$repo_root/.github/workflows/release.yml"
+test -f "$release_workflow"
+for required in \
+  "tags:" \
+  "v*" \
+  "x86_64-unknown-linux-gnu" \
+  "aarch64-unknown-linux-gnu" \
+  "x86_64-apple-darwin" \
+  "aarch64-apple-darwin" \
+  "ubuntu-24.04" \
+  "ubuntu-24.04-arm" \
+  "macos-15-intel" \
+  "macos-14" \
+  "cargo metadata" \
+  "cargo build --locked --release --target" \
+  "scripts/package-release.sh" \
+  "scripts/verify-release.sh" \
+  "actions/attest@v4" \
+  "actions/upload-artifact@v4" \
+  "contents: write" \
+  "--verify-tag" \
+  "SHA256SUMS"; do
+  grep -Fq -- "$required" "$release_workflow"
+done
