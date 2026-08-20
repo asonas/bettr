@@ -692,11 +692,25 @@ pub struct ClaimedIssue {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct DecisionRequestInput {
+    pub blocker: String,
+    pub question: String,
+    pub options: Vec<String>,
+    pub recommendation: String,
+    pub resume_condition: String,
+    pub background: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct DecisionRequest {
     pub id: uuid::Uuid,
     pub issue: String,
     pub question: String,
     pub background: String,
+    pub blocker: String,
+    pub options: Vec<String>,
+    pub recommendation: String,
+    pub resume_condition: String,
     pub requester_kind: Option<InitiatorKind>,
     pub requester_name: Option<String>,
     pub requester_session_id: Option<String>,
@@ -740,6 +754,18 @@ pub fn validate_decision_text(name: &str, value: &str) -> Result<(), crate::erro
         return Err(crate::error::AppError::InvalidInput(format!(
             "{name} must not be empty"
         )));
+    }
+    Ok(())
+}
+
+pub fn validate_decision_options(options: &[String]) -> Result<(), crate::error::AppError> {
+    if options.len() < 2 {
+        return Err(crate::error::AppError::InvalidInput(
+            "decision options must contain at least two choices".to_owned(),
+        ));
+    }
+    for (index, option) in options.iter().enumerate() {
+        validate_decision_text(&format!("decision option {}", index + 1), option)?;
     }
     Ok(())
 }

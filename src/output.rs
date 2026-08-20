@@ -197,7 +197,20 @@ pub fn write_decision_human(request: &crate::domain::DecisionRequest) {
         escape_terminal_controls(&request.issue)
     );
     println!("status: {}", request.status);
+    println!("blocker: {}", escape_terminal_controls(&request.blocker));
     println!("question: {}", escape_terminal_controls(&request.question));
+    println!("options:");
+    for option in &request.options {
+        println!("- {}", escape_terminal_controls(option));
+    }
+    println!(
+        "recommendation: {}",
+        escape_terminal_controls(&request.recommendation)
+    );
+    println!(
+        "resume_condition: {}",
+        escape_terminal_controls(&request.resume_condition)
+    );
     println!(
         "background: {}",
         escape_terminal_controls(&request.background)

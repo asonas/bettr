@@ -41,7 +41,7 @@ bettr issue parent list NUMBER
 bettr issue claim [NUMBER]
 bettr issue heartbeat NUMBER
 bettr issue takeover NUMBER --reason REASON
-bettr decision request NUMBER --question QUESTION --background BACKGROUND
+bettr decision request NUMBER --blocker BLOCKER --question QUESTION --option OPTION... --recommendation RECOMMENDATION --resume-condition RESUME_CONDITION --background BACKGROUND
 bettr decision resolve REQUEST_ID --answer ANSWER --next-state STATE [--reason REASON] [--wait-kind WAIT_KIND] [--summary SUMMARY] [--verification VERIFICATION]
 bettr event list --after CURSOR [--limit LIMIT] [--include-issue]
 bettr capabilities --json

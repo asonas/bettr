@@ -40,7 +40,7 @@ The type of `data` is command-specific. It can be an object, an array, or anothe
 
 `issue claim`, `issue heartbeat`, and `issue takeover` return an object with `issue` and `lease`. The lease belongs to the `BETTR_AGENT` and `BETTR_SESSION_ID` pair. A heartbeat renews only lease timing; it does not change the Issue revision. An expired lease is shown under `status.data.stale` and is never reassigned automatically.
 
-`decision request` returns a request object with a UUID, `PROJECT#NUMBER` reference, question, background, requester context, and `status: "open"`. Creating the request changes the Issue to `blocked` in the same transaction. `decision resolve` records the answer and resolver context and applies the explicit `next_state`; it cannot select `in_progress` because active work must be entered through an agent claim and lease. Resolve to `blocked` with `--reason` and `--wait-kind`, to `done` with `--summary` and `--verification`, or to `cancelled` with `--reason`; these choices emit the corresponding Issue transition event. Resolve to `todo` and let an agent claim the Issue. An open request is exposed under `status.data.attention`; an Issue with any open request cannot transition to `done`.
+`decision request` returns a request object with a UUID, `PROJECT#NUMBER` reference, `blocker`, `question`, `options`, `recommendation`, `resume_condition`, background, requester context, and `status: "open"`. `options` contains the viable human choices. Creating the request changes the Issue to `blocked` in the same transaction. `decision resolve` records the answer and resolver context and applies the explicit `next_state`; it cannot select `in_progress` because active work must be entered through an agent claim and lease. Resolve to `blocked` with `--reason` and `--wait-kind`, to `done` with `--summary` and `--verification`, or to `cancelled` with `--reason`; these choices emit the corresponding Issue transition event. Resolve to `todo` and let an agent claim the Issue. An open request is exposed under `status.data.attention`; an Issue with any open request cannot transition to `done`. Older requests created before these fields were added retain empty structured fields and remain readable through their existing question and background.
 
 `issue dependency` and `issue parent` responses use structured `PROJECT#NUMBER` references. An unqualified Issue number requires `--project`. Dependencies are directed `blocks` edges; parent relations are one level deep.
 
@@ -157,17 +157,17 @@ When a command that requires an initialized database selects an existing SQLite 
 
 For normal local use, bettr verifies that the selected path resolves to a regular file and checks its header without opening SQLite, then rechecks the identity on the opened connection before enabling connection settings. A known older bettr database schema is migrated in a single transaction before the command continues. This protects an unrelated SQLite database from accidental path selection without changing its existing bytes or creating SQLite sidecars during the header preflight.
 
-The SQLite database schema version is independent from the JSON response `schema_version`. The current database schema version is 4; versions 1, 2, and 3 are migrated automatically and their applied versions are recorded in `schema_migrations`. A bettr database with an unknown schema version is rejected before SQLite is opened for writing and exits 2:
+The SQLite database schema version is independent from the JSON response `schema_version`. The current database schema version is 5; versions 1 through 4 are migrated automatically and their applied versions are recorded in `schema_migrations`. A bettr database with an unknown schema version is rejected before SQLite is opened for writing and exits 2:
 
 ```json
 {
   "schema_version": 1,
   "error": {
     "code": "unsupported_database_schema_version",
-    "message": "database schema version 99 is unsupported; current version is 4",
+    "message": "database schema version 99 is unsupported; current version is 5",
     "details": {
       "found_version": 99,
-      "current_version": 4
+      "current_version": 5
     }
   }
 }

@@ -344,7 +344,19 @@ pub struct DecisionRequestCommand {
     pub number: i64,
 
     #[arg(long)]
+    pub blocker: String,
+
+    #[arg(long)]
     pub question: String,
+
+    #[arg(long = "option", required = true)]
+    pub options: Vec<String>,
+
+    #[arg(long)]
+    pub recommendation: String,
+
+    #[arg(long = "resume-condition")]
+    pub resume_condition: String,
 
     #[arg(long)]
     pub background: String,

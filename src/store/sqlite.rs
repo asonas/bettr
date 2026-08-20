@@ -1365,8 +1365,7 @@ impl Database {
         &mut self,
         project_name: &str,
         number: i64,
-        question: &str,
-        background: &str,
+        input: &crate::domain::DecisionRequestInput,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::DecisionRequest, crate::error::AppError> {
         let idempotency = self.take_idempotency("decision_request")?;
@@ -1415,6 +1414,8 @@ impl Database {
         let now = chrono::Utc::now();
         let request_id = uuid::Uuid::new_v4();
         let updated_revision = issue.revision + 1;
+        let options_json = serde_json::to_string(&input.options)
+            .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
         transaction
             .execute(
                 "UPDATE issues
@@ -1427,17 +1428,22 @@ impl Database {
             .execute(
                 "INSERT INTO decision_requests (
                     id, issue_id, question, background, requester_kind, requester_name,
-                    requester_session_id, status, created_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'open', ?8)",
+                    requester_session_id, status, created_at, blocker, options_json,
+                    recommendation, resume_condition
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'open', ?8, ?9, ?10, ?11, ?12)",
                 rusqlite::params![
                     request_id.to_string(),
                     issue.id.to_string(),
-                    question,
-                    background,
+                    input.question,
+                    input.background,
                     context.kind.as_str(),
                     context.initiator_name(),
                     context.session_id,
                     now.to_rfc3339(),
+                    input.blocker,
+                    options_json,
+                    input.recommendation,
+                    input.resume_condition,
                 ],
             )
             .map_err(crate::error::AppError::from)?;
@@ -1486,8 +1492,12 @@ impl Database {
         let request = crate::domain::DecisionRequest {
             id: request_id,
             issue: format!("{project_name}#{}", issue.number),
-            question: question.to_owned(),
-            background: background.to_owned(),
+            question: input.question.clone(),
+            background: input.background.clone(),
+            blocker: input.blocker.clone(),
+            options: input.options.clone(),
+            recommendation: input.recommendation.clone(),
+            resume_condition: input.resume_condition.clone(),
             requester_kind: Some(context.kind),
             requester_name: context.initiator_name().map(str::to_owned),
             requester_session_id: context.session_id.clone(),
@@ -1517,7 +1527,9 @@ impl Database {
                         request.background, request.requester_kind, request.requester_name,
                         request.requester_session_id, request.status, request.answer,
                         request.resolver_kind, request.resolver_name,
-                        request.resolver_session_id, request.created_at, request.resolved_at
+                        request.resolver_session_id, request.created_at, request.resolved_at,
+                        request.blocker, request.options_json, request.recommendation,
+                        request.resume_condition
                  FROM decision_requests request
                  JOIN issues issue ON issue.id = request.issue_id
                  JOIN projects project ON project.id = issue.project_id
@@ -1557,7 +1569,9 @@ impl Database {
                         request.background, request.requester_kind, request.requester_name,
                         request.requester_session_id, request.status, request.answer,
                         request.resolver_kind, request.resolver_name,
-                        request.resolver_session_id, request.created_at, request.resolved_at
+                        request.resolver_session_id, request.created_at, request.resolved_at,
+                        request.blocker, request.options_json, request.recommendation,
+                        request.resume_condition
                  FROM decision_requests request
                  JOIN issues issue ON issue.id = request.issue_id
                  JOIN projects project ON project.id = issue.project_id
@@ -3779,6 +3793,9 @@ impl Database {
         };
         let created_at: String = row.get(13)?;
         let resolved_at: Option<String> = row.get(14)?;
+        let options_json: String = row.get(16)?;
+        let options =
+            serde_json::from_str(&options_json).map_err(|error| parse_error(Box::new(error)))?;
         let id = uuid::Uuid::parse_str(&id).map_err(|error| parse_error(Box::new(error)))?;
         let requester_kind =
             parse_kind(requester_kind).map_err(|error| parse_error(Box::new(error)))?;
@@ -3799,6 +3816,10 @@ impl Database {
             issue: format!("{project}#{number}"),
             question: row.get(3)?,
             background: row.get(4)?,
+            blocker: row.get(15)?,
+            options,
+            recommendation: row.get(17)?,
+            resume_condition: row.get(18)?,
             requester_kind,
             requester_name: row.get(6)?,
             requester_session_id: row.get(7)?,
@@ -4019,6 +4040,7 @@ impl Database {
             (2, "schema_migrations"),
             (3, "phase_two_coordination"),
             (4, "idempotency_and_audit"),
+            (5, "blocked_decision_context"),
         ] {
             transaction
                 .execute(
@@ -4124,6 +4146,17 @@ mod tests {
             agent: Some("test-agent".to_owned()),
             session_id: Some("test-session".to_owned()),
             operator: None,
+        }
+    }
+
+    fn decision_input(question: &str, background: &str) -> crate::domain::DecisionRequestInput {
+        crate::domain::DecisionRequestInput {
+            blocker: "The decision blocks implementation.".to_owned(),
+            question: question.to_owned(),
+            options: vec!["Use option A".to_owned(), "Use option B".to_owned()],
+            recommendation: "Use option A".to_owned(),
+            resume_condition: "The selected option is implemented and verified.".to_owned(),
+            background: background.to_owned(),
         }
     }
 
@@ -4271,23 +4304,17 @@ mod tests {
                 &context(),
             )
             .unwrap();
+        let parser_input = decision_input(
+            "Choose the parser",
+            "The parser has two compatible implementations.",
+        );
         database
-            .request_decision(
-                "bettr",
-                1,
-                "Choose the parser",
-                "The parser has two compatible implementations.",
-                &context(),
-            )
+            .request_decision("bettr", 1, &parser_input, &context())
             .unwrap();
+        let rollout_input =
+            decision_input("Choose the rollout", "The rollout has two safe windows.");
         database
-            .request_decision(
-                "bettr",
-                1,
-                "Choose the rollout",
-                "The rollout has two safe windows.",
-                &context(),
-            )
+            .request_decision("bettr", 1, &rollout_input, &context())
             .unwrap();
 
         let decisions = database.list_decisions("bettr", 1).unwrap();
@@ -4314,14 +4341,12 @@ mod tests {
                 &context(),
             )
             .unwrap();
+        let input = decision_input(
+            "Choose the parser",
+            "The parser has two compatible implementations.",
+        );
         let request = database
-            .request_decision(
-                "bettr",
-                1,
-                "Choose the parser",
-                "The parser has two compatible implementations.",
-                &context(),
-            )
+            .request_decision("bettr", 1, &input, &context())
             .unwrap();
         let result = database.resolve_decision(
             request.id,

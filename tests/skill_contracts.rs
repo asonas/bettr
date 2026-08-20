@@ -43,6 +43,16 @@ fn codex_and_claude_skills_use_only_declared_phase_two_contracts() {
         "BETTR_SESSION_ID",
         "cursor",
         "capability",
+        "Blocker:",
+        "Human decision:",
+        "Options:",
+        "Recommendation:",
+        "Resume condition:",
+        "--blocker",
+        "--option",
+        "--recommendation",
+        "--resume-condition",
+        "exactly one request",
     ] {
         assert!(combined.to_lowercase().contains(&text.to_lowercase()));
     }

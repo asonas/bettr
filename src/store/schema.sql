@@ -148,7 +148,11 @@ CREATE TABLE decision_requests (
     resolver_name TEXT,
     resolver_session_id TEXT,
     created_at TEXT NOT NULL,
-    resolved_at TEXT
+    resolved_at TEXT,
+    blocker TEXT NOT NULL DEFAULT '',
+    options_json TEXT NOT NULL DEFAULT '[]',
+    recommendation TEXT NOT NULL DEFAULT '',
+    resume_condition TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX decision_requests_issue_status
@@ -157,4 +161,4 @@ CREATE INDEX decision_requests_status
     ON decision_requests(status);
 
 PRAGMA application_id = 1112822866;
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;

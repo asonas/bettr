@@ -167,7 +167,7 @@ export function createWebController({
     const resolved = decisions.filter((decision) => decision.status !== "open");
     const waitMarkup = wait ? `<section class="wait-context" aria-live="polite"><h2>${escapeHtml(wait.kind === "human" ? "Waiting for a decision" : "Waiting context")}</h2><p class="wait-kind">${escapeHtml(wait.label)}</p><p class="display-text">${escapeDisplayText(wait.reason)}</p></section>` : "";
     const resolvedMarkup = resolved.length
-      ? `<div class="decision-history" aria-label="Resolved decisions">${resolved.map((decision) => `<article class="decision-record"><div class="decision-record-header"><strong>Decision resolved</strong><span>${escapeHtml(formatDate(decision.resolved_at || decision.created_at))}</span></div><p class="display-text">${escapeDisplayText(decision.question)}</p>${decision.answer ? `<p class="decision-answer display-text">Answer: ${escapeDisplayText(decision.answer)}</p>` : ""}</article>`).join("")}</div>`
+      ? `<div class="decision-history" aria-label="Resolved decisions">${resolved.map((decision) => `<article class="decision-record"><div class="decision-record-header"><strong>Decision resolved</strong><span>${escapeHtml(formatDate(decision.resolved_at || decision.created_at))}</span></div><p class="display-text">${escapeDisplayText(decision.question)}</p>${decisionContextMarkup(decision)}${decision.answer ? `<p class="decision-answer display-text">Answer: ${escapeDisplayText(decision.answer)}</p>` : ""}</article>`).join("")}</div>`
       : "";
     const content = unresolved.length
       ? `<p class="decision-intro">A human answer is needed before this Issue can continue. Each request is resolved separately.</p><div class="decision-forms">${unresolved.map((decision) => decisionForm(decision, revision)).join("")}</div>`
@@ -182,7 +182,7 @@ export function createWebController({
     return `<form class="decision-form" data-decision-form="${id}" data-revision="${revision}" aria-labelledby="${fieldId("question")}" aria-describedby="${fieldId("feedback")}">
       <fieldset>
         <legend id="${fieldId("question")}" class="display-text">${escapeDisplayText(decision.question)}</legend>
-        <p class="decision-background display-text">${escapeDisplayText(decision.background || "No additional background was provided.")}</p>
+        ${decisionContextMarkup(decision)}
         <p class="required-note"><span aria-hidden="true">*</span> Required</p>
         <label for="${fieldId("answer")}">Answer <span aria-hidden="true">*</span></label>
         <textarea id="${fieldId("answer")}" name="answer" rows="3" required></textarea>
@@ -213,6 +213,20 @@ export function createWebController({
         <p id="${fieldId("feedback")}" class="decision-form-feedback" data-decision-feedback role="status" aria-live="polite"></p>
       </fieldset>
     </form>`;
+  }
+
+  function decisionContextMarkup(decision) {
+    const options = Array.isArray(decision.options) ? decision.options : [];
+    const optionsMarkup = options.length
+      ? `<ul>${options.map((option) => `<li class="display-text">${escapeDisplayText(option)}</li>`).join("")}</ul>`
+      : `<p class="display-text">Options were not recorded in this request.</p>`;
+    return `<dl class="decision-context">
+      <div><dt>Blocker</dt><dd class="display-text">${escapeDisplayText(decision.blocker || "Blocker was not recorded in this request.")}</dd></div>
+      <div><dt>Options</dt><dd>${optionsMarkup}</dd></div>
+      <div><dt>Recommendation</dt><dd class="display-text">${escapeDisplayText(decision.recommendation || "Recommendation was not recorded in this request.")}</dd></div>
+      <div><dt>Resume condition</dt><dd class="display-text">${escapeDisplayText(decision.resume_condition || "Resume condition was not recorded in this request.")}</dd></div>
+      <div><dt>Background</dt><dd class="display-text">${escapeDisplayText(decision.background || "No additional background was provided.")}</dd></div>
+    </dl>`;
   }
 
   function updateDecisionFields(form) {

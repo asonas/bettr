@@ -1,4 +1,4 @@
-import { fireEvent, getAllByLabelText, getAllByRole, getByLabelText, getByRole, getByText } from "@testing-library/dom";
+import { fireEvent, getAllByLabelText, getAllByRole, getAllByText, getByLabelText, getByRole, getByText } from "@testing-library/dom";
 import { describe, expect, it, vi } from "vitest";
 
 import { createWebController } from "../../src/web/app.js";
@@ -21,6 +21,10 @@ function decision(id, question) {
     issue: "bettr#1",
     question,
     background: "The answer changes the rollout order.",
+    blocker: "The current implementation cannot proceed without a choice.",
+    options: ["Use option A", "Use option B"],
+    recommendation: "Use option A",
+    resume_condition: "The selected option is implemented and verified.",
     requester_kind: "agent",
     requester_name: "codex",
     requester_session_id: "session-a",
@@ -60,6 +64,9 @@ describe("human decision UI", () => {
     expect(getAllByLabelText(document, /^Next state/)).toHaveLength(2);
     expect(getByText(document, "Which parser should be used?")).toBeTruthy();
     expect(getByText(document, "Which rollout should be used?")).toBeTruthy();
+    expect(getAllByText(document, "The current implementation cannot proceed without a choice.")).toHaveLength(2);
+    expect(getAllByText(document, "Use option A", { selector: "li" })).toHaveLength(2);
+    expect(getAllByText(document, "The selected option is implemented and verified.")).toHaveLength(2);
   });
 
   it("switches metadata requirements with the selected next state", async () => {
