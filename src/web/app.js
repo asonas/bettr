@@ -255,6 +255,7 @@ export function createWebController({
       });
       announceCopy("Decision resolved");
       await renderDetail(project, number);
+      await pollStatus();
     } catch (error) {
       feedback.textContent = error.status === 409
         ? `${error.message} Reload the Issue to review its current revision.`

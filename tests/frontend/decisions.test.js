@@ -100,8 +100,10 @@ describe("human decision UI", () => {
     const resolved = { ...unresolved, status: "resolved", answer: "Use parser A" };
     const initial = detail({ decisions: [unresolved] });
     const afterResolve = detail({ decisions: [resolved], state: "todo", revision: 3, wait: null });
+    const refreshedStatus = { attention: [], stale: [], blocked: [], recently_completed: [], active: [{ ...afterResolve.issue, project: "bettr" }] };
     const fetch = vi.fn((path, options = {}) => {
       if (options.method === "POST") return Promise.resolve(jsonResponse(resolved));
+      if (path === "/api/status") return Promise.resolve(jsonResponse(refreshedStatus));
       return Promise.resolve(jsonResponse(fetch.mock.calls.some(([, call]) => call?.method === "POST") ? afterResolve : initial));
     });
     const controller = createWebController({ fetch });
