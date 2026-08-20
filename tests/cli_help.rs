@@ -18,6 +18,7 @@ fn help_names_the_product_and_core_commands() {
         .stdout(predicate::str::contains("event"))
         .stdout(predicate::str::contains("capabilities"))
         .stdout(predicate::str::contains("status"))
+        .stdout(predicate::str::contains("self-update"))
         .stdout(predicate::str::contains("web"));
 
     Command::cargo_bin("bettr")
@@ -26,6 +27,15 @@ fn help_names_the_product_and_core_commands() {
         .assert()
         .success()
         .stdout(predicate::str::contains("--port"));
+
+    Command::cargo_bin("bettr")
+        .unwrap()
+        .args(["self-update", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--source"))
+        .stdout(predicate::str::contains("release"))
+        .stdout(predicate::str::contains("main"));
 
     Command::cargo_bin("bettr")
         .unwrap()

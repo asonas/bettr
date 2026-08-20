@@ -10,6 +10,8 @@ archive=$1
 checksum_file=$2
 expected_version=$3
 archive_name=$(basename -- "$archive")
+target=${archive_name#bettr-$expected_version-}
+target=${target%.tar.gz}
 
 test -f "$archive"
 test -f "$checksum_file"
@@ -31,6 +33,13 @@ trap 'rm -rf "$extract_dir"' EXIT HUP INT TERM
 tar -xzf "$archive" -C "$extract_dir"
 test -x "$extract_dir/bettr"
 test -f "$extract_dir/LICENSE"
+test -f "$extract_dir/manifest.json"
+test -f "$extract_dir/skills/bettr/SKILL.md"
+test -f "$extract_dir/skills/bettr-claude/SKILL.md"
+grep -Fq '"format_version": 1' "$extract_dir/manifest.json"
+grep -Fq "\"version\": \"$expected_version\"" "$extract_dir/manifest.json"
+grep -Fq "\"target\": \"$target\"" "$extract_dir/manifest.json"
+grep -Eq '"revision": "[^" ]+"' "$extract_dir/manifest.json"
 
 version_output=$($extract_dir/bettr --version)
 case "$version_output" in

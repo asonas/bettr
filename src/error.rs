@@ -28,6 +28,7 @@ pub enum AppError {
         found_version: u32,
         current_version: u32,
     },
+    SelfUpdateFailed(serde_json::Value),
 }
 
 impl AppError {
@@ -45,6 +46,7 @@ impl AppError {
             Self::DatabaseAlreadyInitialized => ExitCode::InvalidInput,
             Self::DatabaseNotInitialized => ExitCode::NotFound,
             Self::UnsupportedDatabaseSchemaVersion { .. } => ExitCode::InvalidInput,
+            Self::SelfUpdateFailed(_) => ExitCode::Internal,
         }
     }
 
@@ -62,6 +64,7 @@ impl AppError {
             Self::DatabaseAlreadyInitialized => "database_already_initialized",
             Self::DatabaseNotInitialized => "database_not_initialized",
             Self::UnsupportedDatabaseSchemaVersion { .. } => "unsupported_database_schema_version",
+            Self::SelfUpdateFailed(_) => "self_update_failed",
         }
     }
 }
@@ -94,6 +97,7 @@ impl std::fmt::Display for AppError {
                 formatter,
                 "database schema version {found_version} is unsupported; current version is {current_version}"
             ),
+            Self::SelfUpdateFailed(_) => formatter.write_str("self-update failed"),
         }
     }
 }

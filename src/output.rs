@@ -49,6 +49,9 @@ pub fn write_error(mode: OutputMode, error: &crate::error::AppError) {
                         "current_version": current_version,
                     });
                 }
+                crate::error::AppError::SelfUpdateFailed(report) => {
+                    error_value["error"]["details"] = report.clone();
+                }
                 _ => {}
             }
             eprintln!("{error_value}");
@@ -61,6 +64,35 @@ pub fn write_success(data: impl serde::Serialize) {
         "{}",
         serde_json::json!({ "schema_version": 1, "data": data })
     );
+}
+
+pub fn write_self_update_human(report: &crate::self_update::SelfUpdateReport) {
+    println!("source: {}", report.source.as_str());
+    println!("revision: {}", escape_terminal_controls(&report.revision));
+    write_self_update_component("cli", &report.cli);
+    write_self_update_component("codex", &report.codex);
+    write_self_update_component("claude", &report.claude);
+}
+
+fn write_self_update_component(name: &str, component: &crate::self_update::ComponentUpdate) {
+    let version = component
+        .version
+        .as_deref()
+        .map_or_else(|| "-".to_owned(), escape_terminal_controls);
+    println!(
+        "{name}: {} source={} version={} revision={}",
+        component.result.as_str(),
+        component.source.as_str(),
+        version,
+        escape_terminal_controls(&component.revision)
+    );
+    println!("  path: {}", escape_terminal_controls(&component.path));
+    if let Some(backup) = &component.backup {
+        println!("  backup: {}", escape_terminal_controls(backup));
+    }
+    if let Some(error) = &component.error {
+        println!("  error: {}", escape_terminal_controls(error));
+    }
 }
 
 pub fn write_project_human(project: &crate::domain::Project) {

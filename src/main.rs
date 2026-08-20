@@ -3,6 +3,7 @@ mod cli;
 mod domain;
 mod error;
 mod output;
+mod self_update;
 mod store;
 mod web;
 
@@ -49,6 +50,26 @@ fn run(
     cli: crate::cli::Cli,
     output_mode: crate::output::OutputMode,
 ) -> Result<(), crate::error::AppError> {
+    if let crate::cli::Command::SelfUpdate(command) = &cli.command {
+        let source = crate::app::App::resolved_update_source(command.source)?.value;
+        let report = crate::self_update::run(source)?;
+        if output_mode == crate::output::OutputMode::Human {
+            crate::output::write_self_update_human(&report);
+        }
+        if report.succeeded() {
+            if output_mode == crate::output::OutputMode::Json {
+                crate::output::write_success(report);
+            }
+            return Ok(());
+        }
+        let report = serde_json::to_value(report).map_err(|error| {
+            crate::error::AppError::Internal(format!(
+                "could not serialize self-update result: {error}"
+            ))
+        })?;
+        return Err(crate::error::AppError::SelfUpdateFailed(report));
+    }
+
     let resolved_context =
         crate::app::App::resolved_context(cli.project.clone(), cli.database.clone())?;
     let database_path = resolved_context.database.value.clone();
@@ -515,6 +536,9 @@ fn run(
                 crate::output::OutputMode::Json => crate::output::write_success(resolved_context),
             }
             Ok(())
+        }
+        crate::cli::Command::SelfUpdate(_) => {
+            unreachable!("self-update is handled before DB resolution")
         }
         crate::cli::Command::Web(web_command) => crate::web::run(&database_path, web_command.port),
     }

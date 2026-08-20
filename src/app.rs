@@ -32,6 +32,16 @@ pub struct ResolvedContext {
     pub database: ResolvedValue<std::path::PathBuf>,
 }
 
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Deserialize, serde::Serialize,
+)]
+#[clap(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateSource {
+    Release,
+    Main,
+}
+
 #[derive(Clone, Debug)]
 pub struct AuditFilter {
     pub project_id: Option<uuid::Uuid>,
@@ -77,12 +87,14 @@ pub struct AuditEvent {
 struct UserConfig {
     project: Option<String>,
     database: Option<std::path::PathBuf>,
+    update_source: Option<UpdateSource>,
 }
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DirectoryConfig {
     project: Option<String>,
+    update_source: Option<UpdateSource>,
 }
 
 pub struct App {
@@ -256,6 +268,43 @@ impl App {
         };
 
         Ok(ResolvedContext { project, database })
+    }
+
+    pub fn resolved_update_source(
+        source_argument: Option<UpdateSource>,
+    ) -> Result<ResolvedValue<UpdateSource>, crate::error::AppError> {
+        let user_config_path = Self::user_config_path()?;
+        let user_config = Self::read_config::<UserConfig>(&user_config_path)?;
+        let directory_config = Self::directory_config()?;
+
+        if let Some(source) = source_argument {
+            return Ok(ResolvedValue {
+                value: source,
+                source: ContextSource::Argument,
+            });
+        }
+        if let Some(source) = Self::environment_string("BETTR_UPDATE_SOURCE")? {
+            return Ok(ResolvedValue {
+                value: Self::parse_update_source("BETTR_UPDATE_SOURCE", &source)?,
+                source: ContextSource::Environment,
+            });
+        }
+        if let Some(source) = directory_config.and_then(|config| config.update_source) {
+            return Ok(ResolvedValue {
+                value: source,
+                source: ContextSource::DirectoryConfig,
+            });
+        }
+        if let Some(source) = user_config.and_then(|config| config.update_source) {
+            return Ok(ResolvedValue {
+                value: source,
+                source: ContextSource::UserConfig,
+            });
+        }
+        Ok(ResolvedValue {
+            value: UpdateSource::Release,
+            source: ContextSource::Default,
+        })
     }
 
     pub fn list_audit_events(
@@ -1670,6 +1719,19 @@ impl App {
         Self::environment_string(name).map(|value| value.map(std::path::PathBuf::from))
     }
 
+    fn parse_update_source(
+        name: &str,
+        value: &str,
+    ) -> Result<UpdateSource, crate::error::AppError> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "release" => Ok(UpdateSource::Release),
+            "main" => Ok(UpdateSource::Main),
+            _ => Err(crate::error::AppError::InvalidInput(format!(
+                "{name} must be release or main"
+            ))),
+        }
+    }
+
     fn validate_project_context(project: String) -> Result<String, crate::error::AppError> {
         crate::domain::validate_project_name(&project)?;
         Ok(project)
@@ -1697,5 +1759,18 @@ impl App {
             original_error.code(),
             audit_error.code()
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn update_source_configuration_accepts_release_and_main() {
+        let config = toml::from_str::<super::UserConfig>("update_source = \"main\"\n").unwrap();
+        assert_eq!(config.update_source, Some(super::UpdateSource::Main));
+        assert_eq!(
+            super::App::parse_update_source("BETTR_UPDATE_SOURCE", " RELEASE ").unwrap(),
+            super::UpdateSource::Release
+        );
     }
 }

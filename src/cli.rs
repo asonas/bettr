@@ -97,6 +97,7 @@ impl AuditInvocation {
             ("audit", Some("list")) => "audit_list",
             ("audit", _) => "audit",
             ("context", _) => "context",
+            ("self-update", _) => "self_update",
             ("web", _) => "web",
             _ => return None,
         };
@@ -119,7 +120,15 @@ pub enum Command {
     Status(StatusCommand),
     Audit(AuditCommand),
     Context(ContextCommand),
+    SelfUpdate(SelfUpdateCommand),
     Web(WebCommand),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct SelfUpdateCommand {
+    /// Update from the latest GitHub Release or the main branch.
+    #[arg(long, value_enum)]
+    pub source: Option<crate::app::UpdateSource>,
 }
 
 #[derive(clap::Args, Debug)]

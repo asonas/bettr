@@ -23,6 +23,9 @@ grep -Eq '^[0-9a-f]{64}[[:space:]][[:space:]]bettr-9\.9\.9-x86_64-unknown-linux-
 archive_listing=$(tar -tzf "$archive")
 printf '%s\n' "$archive_listing" | grep -Fx 'bettr'
 printf '%s\n' "$archive_listing" | grep -Fx 'LICENSE'
+printf '%s\n' "$archive_listing" | grep -Fx 'manifest.json'
+printf '%s\n' "$archive_listing" | grep -F 'skills/bettr/SKILL.md'
+printf '%s\n' "$archive_listing" | grep -F 'skills/bettr-claude/SKILL.md'
 
 ci_workflow="$repo_root/.github/workflows/ci.yml"
 test -f "$ci_workflow"

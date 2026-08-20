@@ -112,6 +112,10 @@ Failed commands return a nonzero exit code and write:
 
 `error.code` is the stable machine-readable identifier. `error.message` is intended for diagnostics and must not be parsed. `error.details` is present only when the error supplies structured details; Phase 1 revision conflicts include `current_revision`. Idempotency key collisions use `idempotency_conflict` and do not include request-specific details.
 
+## Self-update
+
+`self-update --json` returns `cli`, `codex`, and `claude` component results. Each component includes its `source`, `version`, `revision`, `result`, and installed `path`. `result` is `updated`, `installed`, or `failed`. A failed component also includes `error`; a retained skill backup is reported as `backup`. If any component fails, the command exits 10 and puts the same report in `error.details` with `error.code: "self_update_failed"`.
+
 ## Timestamps
 
 All JSON timestamps are RFC 3339 strings in UTC. bettr serializes UTC with the `Z` suffix, for example `2026-08-15T09:30:00Z`. Consumers must parse the timestamp as an instant rather than relying on a fixed number of fractional-second digits.

@@ -102,6 +102,18 @@ bettr issue heartbeat 1 --project bettr --json
 
 Use `--idempotency-key` for retry-safe writes and `issue batch --input <path> --json` for atomic JSON batches. Use `bettr capabilities --json` to discover the available coordination features.
 
+Update the CLI and both agent Skills together from the latest Release:
+
+```sh
+bettr self-update
+```
+
+Use the current `main` branch instead, or set `update_source = "main"` in the bettr config:
+
+```sh
+bettr self-update --source main
+```
+
 The JSON response contract is documented in [`docs/json-contract.md`](docs/json-contract.md). Agent-specific workflows are documented in [`skills/bettr`](skills/bettr) and [`skills/bettr-claude`](skills/bettr-claude).
 
 ## Data and limits
