@@ -120,6 +120,20 @@ pub fn write_projects_human(projects: &[crate::domain::Project]) {
     }
 }
 
+pub fn write_backup_human(result: &crate::store::backup::BackupResult) {
+    println!(
+        "backup {}",
+        escape_terminal_controls(&result.output.display().to_string())
+    );
+}
+
+pub fn write_restore_human(result: &crate::store::backup::RestoreResult) {
+    println!(
+        "restored {}",
+        escape_terminal_controls(&result.output.display().to_string())
+    );
+}
+
 pub fn write_issue_created_human(project: &str, issue: &crate::domain::Issue) {
     println!(
         "{}#{} {}",

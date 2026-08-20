@@ -4,7 +4,7 @@ pub struct Database {
     audit_enabled: bool,
 }
 
-const BETTR_APPLICATION_ID: u32 = 0x4254_5452;
+pub(crate) const BETTR_APPLICATION_ID: u32 = 0x4254_5452;
 const LEASE_TTL_MINUTES: i64 = 15;
 
 struct DatabaseIdentity {

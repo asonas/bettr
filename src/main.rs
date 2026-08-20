@@ -38,12 +38,15 @@ fn main() -> std::process::ExitCode {
         }
     };
     let output_mode = crate::output::OutputMode::from(&cli);
+    let restore_command = matches!(&cli.command, crate::cli::Command::Restore(_));
     let database_path =
         crate::app::App::resolved_context(cli.project.clone(), cli.database.clone())
             .ok()
             .map(|context| context.database.value);
     let result = crate::run(cli, output_mode);
-    if let Some(database_path) = database_path {
+    if (!restore_command || result.is_err())
+        && let Some(database_path) = database_path
+    {
         crate::flush_audit_jsonl(&database_path, output_mode);
     }
 
@@ -672,6 +675,52 @@ fn run(
             }?;
             match output_mode {
                 crate::output::OutputMode::Human => crate::output::write_redaction_human(&result),
+                crate::output::OutputMode::Json => crate::output::write_success(result),
+            }
+            Ok(())
+        }
+        crate::cli::Command::Backup(command) => {
+            let database = crate::store::Database::open(&database_path)?;
+            let mut app =
+                crate::app::App::new(database).with_idempotency_key(idempotency_key.clone())?;
+            let result = app.backup_database(&command.output)?;
+            match output_mode {
+                crate::output::OutputMode::Human => crate::output::write_backup_human(&result),
+                crate::output::OutputMode::Json => crate::output::write_success(result),
+            }
+            Ok(())
+        }
+        crate::cli::Command::Restore(command) => {
+            let context = crate::domain::ExecutionContext::resolve()?;
+            let result = crate::store::backup::restore(
+                &command.input,
+                &command.output,
+                command.replace,
+                command.yes,
+                &context,
+                chrono::Utc::now(),
+            );
+            let result = match result {
+                Ok(result) => result,
+                Err(error) => {
+                    let error = match crate::store::Database::open(&database_path) {
+                        Ok(database) => {
+                            let mut app = crate::app::App::new(database);
+                            app.audited_cli_failure(
+                                "restore",
+                                None,
+                                &context,
+                                error,
+                                chrono::Utc::now(),
+                            )
+                        }
+                        Err(_) => error,
+                    };
+                    return Err(error);
+                }
+            };
+            match output_mode {
+                crate::output::OutputMode::Human => crate::output::write_restore_human(&result),
                 crate::output::OutputMode::Json => crate::output::write_success(result),
             }
             Ok(())

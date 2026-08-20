@@ -576,6 +576,8 @@ fn error_response(status: u16, error: crate::error::AppError) -> HttpResponse {
 fn status_code(error: &crate::error::AppError) -> u16 {
     match error {
         crate::error::AppError::InvalidInput(_)
+        | crate::error::AppError::InvalidBackup(_)
+        | crate::error::AppError::BackupConfirmationRequired
         | crate::error::AppError::UnsupportedDatabaseSchemaVersion { .. } => 400,
         crate::error::AppError::NotFound(_) | crate::error::AppError::DatabaseNotInitialized => 404,
         crate::error::AppError::DatabaseBusy(_) => 503,
@@ -583,11 +585,14 @@ fn status_code(error: &crate::error::AppError) -> u16 {
         | crate::error::AppError::IdempotencyConflict
         | crate::error::AppError::InvalidTransition(_)
         | crate::error::AppError::RevisionConflict { .. }
-        | crate::error::AppError::ProjectNameConflict => 409,
+        | crate::error::AppError::ProjectNameConflict
+        | crate::error::AppError::BackupOutputExists
+        | crate::error::AppError::BackupDestinationInUse => 409,
         crate::error::AppError::Internal(_)
         | crate::error::AppError::DatabaseAlreadyInitialized
         | crate::error::AppError::AuditIntegrity { .. }
         | crate::error::AppError::AuditOperation { .. }
+        | crate::error::AppError::BackupOperation { .. }
         | crate::error::AppError::SelfUpdateFailed(_) => 500,
     }
 }

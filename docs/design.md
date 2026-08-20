@@ -61,15 +61,17 @@ wayfinderは単調増加するイベント番号をカーソルとして、前�
 
 監査はSQLite内の追記専用イベントを正本とし、外部向けに追記専用のJSON Linesログを持つ二層構造とします。成功と失敗、読み取りと書き込みを含むすべてのCLI呼び出しを記録します。ただし、生のコマンドライン、Issue本文、コメント本文、秘密値は監査ログへ保存せず、解析済みの操作名、対象ID、変更フィールド、実行コンテキスト、結果を記録します。
 
-JSON Linesは一行一イベントとし、各行にスキーマバージョンと直前イベントのハッシュを含めます。通常のCLI実行に伴って、DB隣接の`.audit.jsonl`へ自動投影します。複数プロセスの追記はSQLiteを介して直列化し、ファイルへの未反映イベントは次回実行時に復旧します。`audit verify [--path PATH]`はファイル内の連番とハッシュチェーンを検査し、`audit archive`は日時付き世代へ退避してSQLite cursorの直前ハッシュから新activeへ継続し、`audit rebuild`はSQLiteから一時ファイルを経由してactiveを再構築します。`redact issue|comment|audit`はhuman操作だけを許可し、SQLite内の対象コンテンツを一トランザクションで安全な表現へ置換してredactionイベントを追記します。過去JSONLとredaction前のbackupは書き換えず、保持期間と自動削除は実装しません。
+JSON Linesは一行一イベントとし、各行にスキーマバージョンと直前イベントのハッシュを含めます。通常のCLI実行に伴って、DB隣接の`.audit.jsonl`へ自動投影します。複数プロセスの追記はSQLiteを介して直列化し、ファイルへの未反映イベントは次回実行時に復旧します。`audit verify [--path PATH]`はファイル内の連番とハッシュチェーンを検査し、`audit archive`は日時付き世代へ退避してSQLite cursorの直前ハッシュから新activeへ継続し、`audit rebuild`はSQLiteから一時ファイルを経由してactiveを再構築します。Issue #11の`backup`はSQLite online backup APIでコミット済みWALを含む単一ファイルsnapshotを作り、`restore`はidentity、schema、integrity、foreign keyを検証してから一時先へ復元します。復元先のactive JSONLはSQLiteの全監査イベントから再構築し、archive世代は含めません。
 
-秘密情報を誤って保存した場合は、`redaction` capabilityの明示対象をhuman操作で消去します。過去JSONLと既存backupは監査上の不変artifactとして残るため、redaction前のbackupは機密artifactとして手動管理します。自動保持削除は行いません。Issue #9では、最初から生のコマンドライン、Issue本文、コメント本文、秘密値をJSONLへ出力しないことも保証します。
+`redact issue|comment|audit`はhuman操作だけを許可し、SQLite内の対象コンテンツを一トランザクションで安全な表現へ置換してredactionイベントを追記します。過去JSONLとredaction前のbackupは書き換えず、保持期間と自動削除は実装しません。`redaction`、retention、doctorは後続Issueの範囲です。
+
+秘密情報を誤って保存した場合は、`redaction` capabilityの明示対象をhuman操作で消去します。過去JSONLと既存backupは監査上の不変artifactとして残るため、redaction前のbackupは機密artifactとして手動管理します。自動保持削除は行いません。Issue #9では最初から生のコマンドライン、Issue本文、コメント本文、秘密値をJSONLへ出力しないことを保証し、Issue #11のバックアップ監査にも同じ安全な操作・結果メタデータの契約を適用します。
 
 ## 実装段階
 
 Phase 1では、プロジェクト、Issue、コメント、5状態、履歴、JSON出力、SQLiteの並行アクセスを実装します。後から復元できないため、SQLite内の監査イベント、実行コンテキスト、担当情報もこの段階から保存します。
 
-Phase 2では、claim、lease、判断要求、依存関係、親子関係、イベントカーソル、冪等性を追加します。Phase 3では、監査JSON Linesとそのverify/archive/rebuild、SQLite内の機密情報redactionを追加し、バックアップ、復元、`bettr doctor`、自動retentionは後続Issueで扱います。専用スキルは各Phaseと同時に提供し、その時点で実装済みのコマンドだけを利用します。
+Phase 2では、claim、lease、判断要求、依存関係、親子関係、イベントカーソル、冪等性を追加します。Phase 3では、監査JSON Linesとそのverify/archive/rebuild、SQLite backup/restoreを追加し、機密情報の消去、`bettr doctor`は後続Issueで扱います。専用スキルは各Phaseと同時に提供し、その時点で実装済みのコマンドだけを利用します。
 
 ## 配布と将来
 

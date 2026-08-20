@@ -20,6 +20,8 @@ fn help_names_the_product_and_core_commands() {
         .stdout(predicate::str::contains("redact"))
         .stdout(predicate::str::contains("status"))
         .stdout(predicate::str::contains("self-update"))
+        .stdout(predicate::str::contains("backup"))
+        .stdout(predicate::str::contains("restore"))
         .stdout(predicate::str::contains("web"));
 
     Command::cargo_bin("bettr")

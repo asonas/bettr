@@ -18,7 +18,7 @@ Phase 2では、原子的なclaim、セッション単位のlease、heartbeat、
 
 ## Phase 3: Audit and Operations
 
-Phase 3では、SQLiteを正本とする追記専用JSON Lines監査ログ、ハッシュチェーン、未反映イベントの復旧を段階的に実装します。Issue #9は通常のCLI実行に伴う安全な自動投影、SQLite cursorによる追記直列化、クラッシュ復旧、ローテーション境界を対象とし、Issue #10はarchive、verify、SQLiteからの再構築、Issue #12はSQLite内の機密情報redactionと保持方針を対象とします。SQLite online backupと`bettr doctor`は別の後続Issueで扱います。
+Phase 3では、SQLiteを正本とする追記専用JSON Lines監査ログ、ハッシュチェーン、未反映イベントの復旧、SQLiteバックアップと復元を段階的に実装します。Issue #9は通常のCLI実行に伴う安全な自動投影、SQLite cursorによる追記直列化、クラッシュ復旧、ローテーション境界を対象とし、Issue #10はarchive、verify、SQLiteからの再構築、Issue #11は稼働中SQLiteのonline backup、identity・schema・integrity検証、明示的な復元公開を対象とします。監査履歴を考慮した機密情報消去と保持期間はIssue #12、`bettr doctor`は別の後続Issueで扱います。
 
 Issue #9の完了条件は、プロセス停止を挟んでも監査JSONLをSQLiteから復旧でき、複数プロセスで重複なく追記でき、生の入力や秘密値を出力しないことです。Issue #12の完了条件は、対象を明示したhuman限定redaction、SQLite監査と履歴metadataの安全化、過去JSONLとbackupを変更しない扱い、再実行・not_found・途中失敗の安全な契約です。改変・欠落の検知、バックアップ、保持期間は各Issueの完了条件とします。
 
@@ -28,7 +28,7 @@ Web UIはネットワーク共有を目的とせず、`bettr web`でloopbackに�
 
 ## Skills and Distribution
 
-各Phaseと同時にCodexおよびClaude Code向けの最小スキルを更新します。スキルは利用可能なcapabilityだけを使い、Issue化の基準、競合時の再読込、完了根拠の記録を定めます。配布はMIT Licenseの下でGitHub Releasesから行います。Phase 1の間は`cargo install --path .`によるローカル利用も維持します。GitHub Releasesの初期配布は、macOS/Linuxのx86_64・aarch64向けarchive、SHA-256、artifact attestationをタグ駆動workflowで提供します。HomebrewやOS-native installerは後続Issueの範囲です。
+各Phaseと同時にCodexおよびClaude Code向けの最小スキルを更新します。スキルは利用可能なcapabilityだけを使い、Issue化の基準、競合時の再読込、完了根拠の記録を定めます。`sqlite_backup_restore`は明示パス、非暗黙上書き、SQLite単一ファイル、監査JSONL再構築を含む運用契約を提供します。配布はMIT Licenseの下でGitHub Releasesから行います。Phase 1の間は`cargo install --path .`によるローカル利用も維持します。GitHub Releasesの初期配布は、macOS/Linuxのx86_64・aarch64向けarchive、SHA-256、artifact attestationをタグ駆動workflowで提供します。HomebrewやOS-native installerは後続Issueの範囲です。
 
 ## Performance Gate
 

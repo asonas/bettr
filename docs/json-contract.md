@@ -95,6 +95,40 @@ array runs in one transaction and either commits all operations or rolls all
 of them back. A batch idempotency key replays the complete ordered result
 array.
 
+## SQLite backup and restore
+
+When `sqlite_backup_restore` is `true`, the top-level `backup` and `restore`
+commands are available. Backup requires an explicit new output path:
+
+```sh
+bettr --database /path/to/bettr.db backup \
+  --output /path/to/snapshot.db --json
+```
+
+The result data contains `format: "sqlite_online_backup"` and the supported
+`schema_version`. The snapshot is one SQLite file created through SQLite's
+online backup API. Committed WAL content is included; `-wal`, `-shm`, and
+`-journal` sidecars are not copied. An existing output is rejected with
+`backup_output_exists`.
+
+Restore requires explicit input and output paths and `--yes`:
+
+```sh
+bettr restore --input /path/to/snapshot.db \
+  --output /path/to/restored.db --yes --json
+```
+
+Before publishing, bettr validates the backup's SQLite identity, supported
+schema version, integrity, and foreign-key consistency. A supported older
+schema is migrated in the staged destination; a future schema or another
+SQLite database is rejected. A corrupt file returns `invalid_backup`. An
+existing destination, including an existing active `.audit.jsonl`, requires
+both `--replace` and `--yes`; SQLite sidecars at the input or destination are
+rejected. Restore publishes only after the staged database and its rebuilt
+active `.audit.jsonl` are ready. The active JSONL is rebuilt from all SQLite
+audit events, while archived JSONL generations are not bundled. Error
+messages do not include raw paths or operating-system filesystem details.
+
 ## Error envelope
 
 Failed commands return a nonzero exit code and write:

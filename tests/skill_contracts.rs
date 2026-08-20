@@ -3,7 +3,7 @@ fn skill_text(path: &str) -> String {
 }
 
 #[test]
-fn codex_and_claude_skills_use_only_declared_phase_two_contracts() {
+fn codex_and_claude_skills_use_only_declared_contracts() {
     let matrix: serde_json::Value =
         serde_json::from_str(include_str!("../contracts/capabilities.json")).unwrap();
     let codex = skill_text("skills/bettr/SKILL.md");
@@ -25,6 +25,8 @@ fn codex_and_claude_skills_use_only_declared_phase_two_contracts() {
     assert!(combined.contains("bettr issue batch"));
     assert!(combined.contains("audit_jsonl"));
     assert!(combined.contains("JSONL"));
+    assert!(combined.contains("bettr backup --output"));
+    assert!(combined.contains("bettr restore --input"));
     for command in [
         "bettr capabilities --json",
         "bettr issue claim",

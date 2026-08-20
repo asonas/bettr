@@ -37,6 +37,13 @@ pub enum AppError {
         current_version: u32,
     },
     SelfUpdateFailed(serde_json::Value),
+    InvalidBackup(String),
+    BackupOutputExists,
+    BackupConfirmationRequired,
+    BackupDestinationInUse,
+    BackupOperation {
+        operation: &'static str,
+    },
 }
 
 impl AppError {
@@ -57,6 +64,9 @@ impl AppError {
             Self::DatabaseNotInitialized => ExitCode::NotFound,
             Self::UnsupportedDatabaseSchemaVersion { .. } => ExitCode::InvalidInput,
             Self::SelfUpdateFailed(_) => ExitCode::Internal,
+            Self::InvalidBackup(_) | Self::BackupConfirmationRequired => ExitCode::InvalidInput,
+            Self::BackupOutputExists | Self::BackupDestinationInUse => ExitCode::Conflict,
+            Self::BackupOperation { .. } => ExitCode::Internal,
         }
     }
 
@@ -77,6 +87,11 @@ impl AppError {
             Self::DatabaseNotInitialized => "database_not_initialized",
             Self::UnsupportedDatabaseSchemaVersion { .. } => "unsupported_database_schema_version",
             Self::SelfUpdateFailed(_) => "self_update_failed",
+            Self::InvalidBackup(_) => "invalid_backup",
+            Self::BackupOutputExists => "backup_output_exists",
+            Self::BackupConfirmationRequired => "confirmation_required",
+            Self::BackupDestinationInUse => "backup_destination_in_use",
+            Self::BackupOperation { .. } => "backup_operation_failed",
         }
     }
 }
@@ -114,6 +129,17 @@ impl std::fmt::Display for AppError {
                 "database schema version {found_version} is unsupported; current version is {current_version}"
             ),
             Self::SelfUpdateFailed(_) => formatter.write_str("self-update failed"),
+            Self::InvalidBackup(message) => formatter.write_str(message),
+            Self::BackupOutputExists => formatter.write_str("backup output already exists"),
+            Self::BackupConfirmationRequired => {
+                formatter.write_str("restore confirmation is required")
+            }
+            Self::BackupDestinationInUse => {
+                formatter.write_str("destination has SQLite sidecar files")
+            }
+            Self::BackupOperation { operation } => {
+                write!(formatter, "backup {operation} operation failed")
+            }
         }
     }
 }

@@ -513,6 +513,23 @@ impl App {
         }
     }
 
+    pub fn backup_database(
+        &mut self,
+        output: &std::path::Path,
+    ) -> Result<crate::store::backup::BackupResult, crate::error::AppError> {
+        self.run_audit_tool(
+            "backup",
+            |database| crate::store::backup::create(database.connection(), output),
+            |result| {
+                serde_json::json!({
+                    "format": result.format,
+                    "schema_version": result.schema_version,
+                })
+                .to_string()
+            },
+        )
+    }
+
     fn run_audit_tool<T, F, M>(
         &mut self,
         operation: &str,
@@ -2040,6 +2057,7 @@ impl App {
                 ("idempotency", true),
                 ("audit_jsonl", true),
                 ("redaction", true),
+                ("sqlite_backup_restore", true),
             ]
             .into_iter()
             .collect(),

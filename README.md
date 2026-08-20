@@ -129,10 +129,24 @@ The JSON response contract is documented in [`docs/json-contract.md`](docs/json-
 - bettr stores data locally in SQLite.
 - bettr does not start agents, share data over a network, or use external databases.
 - The web UI binds only to the loopback interface.
-- JSONL audit export and redaction are available capabilities; backup and restore,
-  retention, and `doctor` diagnostics remain future work. See
-  [`contracts/capabilities.json`](contracts/capabilities.json) for the
-  machine-readable availability matrix.
+- JSONL audit export, redaction, and SQLite backup/restore are available capabilities; retention and `doctor` diagnostics remain future work. See [`contracts/capabilities.json`](contracts/capabilities.json) for the machine-readable availability matrix.
+
+### SQLite backup and restore
+
+Create a snapshot to an explicit, new path:
+
+```sh
+bettr --database /path/to/bettr.db backup --output /path/to/snapshot.db --json
+```
+
+The snapshot is a single SQLite file produced with SQLite's online backup API. It includes committed WAL content and never copies `-wal`, `-shm`, or `-journal` sidecars. Existing output is rejected. Restore requires an explicit input and output plus confirmation:
+
+```sh
+bettr restore --input /path/to/snapshot.db \
+  --output /path/to/restored.db --yes --json
+```
+
+Before publishing, restore validates SQLite identity, supported schema version, integrity, and foreign keys, stages the destination, and rebuilds its active `.audit.jsonl` from SQLite audit events. Existing database or sidecar files require both `--replace` and `--yes`; archived JSONL generations are not bundled or restored. Errors use stable codes such as `invalid_backup`, `backup_output_exists`, `confirmation_required`, and `backup_operation_failed` without echoing filesystem details.
 
 ## License
 

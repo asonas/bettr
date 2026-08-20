@@ -1,7 +1,7 @@
 mod support;
 
 #[test]
-fn capabilities_report_the_phase_two_contract_and_match_fixture() {
+fn capabilities_report_the_contract_and_match_fixture() {
     let app = crate::support::TestApp::new();
     let output = app
         .command()
@@ -28,6 +28,7 @@ fn capabilities_report_the_phase_two_contract_and_match_fixture() {
     assert_eq!(capabilities["capabilities"]["idempotency"], true);
     assert_eq!(capabilities["capabilities"]["audit_jsonl"], true);
     assert_eq!(capabilities["capabilities"]["redaction"], true);
+    assert_eq!(capabilities["capabilities"]["sqlite_backup_restore"], true);
 
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("../contracts/capabilities.json")).unwrap();

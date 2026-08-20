@@ -104,6 +104,8 @@ impl AuditInvocation {
             ("redact", Some("comment")) => "redact_comment",
             ("redact", Some("audit")) => "redact_audit",
             ("redact", _) => "redact",
+            ("backup", _) => "backup",
+            ("restore", _) => "restore",
             ("context", _) => "context",
             ("self-update", _) => "self_update",
             ("web", _) => "web",
@@ -128,6 +130,8 @@ pub enum Command {
     Status(StatusCommand),
     Audit(AuditCommand),
     Redact(RedactCommand),
+    Backup(BackupCommand),
+    Restore(RestoreCommand),
     Context(ContextCommand),
     SelfUpdate(SelfUpdateCommand),
     Web(WebCommand),
@@ -627,6 +631,27 @@ pub struct RedactCommentCommand {
 #[derive(clap::Args, Debug)]
 pub struct RedactAuditCommand {
     pub id: uuid::Uuid,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct BackupCommand {
+    #[arg(long, value_name = "PATH")]
+    pub output: std::path::PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RestoreCommand {
+    #[arg(long, value_name = "PATH")]
+    pub input: std::path::PathBuf,
+
+    #[arg(long, value_name = "PATH")]
+    pub output: std::path::PathBuf,
+
+    #[arg(long, requires = "yes")]
+    pub replace: bool,
+
+    #[arg(long)]
+    pub yes: bool,
 }
 
 #[derive(clap::Args, Debug)]

@@ -12,6 +12,7 @@
     "capabilities": true,
     "idempotency": true,
     "audit_jsonl": true,
-    "redaction": true
+    "redaction": true,
+    "sqlite_backup_restore": true
   }
 }
