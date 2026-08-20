@@ -5,6 +5,7 @@ const APP_JS: &str = include_str!("web/app.js");
 
 const MAX_REQUEST_LINE: usize = 8 * 1024;
 const MAX_HEADERS: usize = 64;
+const MAX_REQUEST_BODY: usize = 64 * 1024;
 
 pub fn run(database_path: &std::path::Path, port: u16) -> Result<(), crate::error::AppError> {
     let _database = crate::store::Database::open(database_path)?;
@@ -51,6 +52,57 @@ struct Request {
     method: String,
     path: String,
     query: std::collections::BTreeMap<String, String>,
+    body: Vec<u8>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct WebWait {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<crate::domain::WaitKind>,
+    label: String,
+    reason: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct WebIssueItem {
+    #[serde(flatten)]
+    item: crate::domain::IssueListItem,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wait: Option<WebWait>,
+    unresolved_decision_count: usize,
+    decision_questions: Vec<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct WebStatus {
+    attention: Vec<WebIssueItem>,
+    stale: Vec<WebIssueItem>,
+    blocked: Vec<WebIssueItem>,
+    recently_completed: Vec<WebIssueItem>,
+    active: Vec<WebIssueItem>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct WebIssueDetail {
+    project: String,
+    issue: crate::domain::Issue,
+    history: Vec<crate::domain::DomainEvent>,
+    decisions: Vec<crate::domain::DecisionRequest>,
+    dependencies: Vec<crate::domain::IssueDependency>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wait: Option<WebWait>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResolveDecisionRequest {
+    expected_revision: i64,
+    answer: String,
+    next_state: crate::domain::IssueState,
+    summary: Option<String>,
+    verification: Option<String>,
+    reason: Option<String>,
+    wait_kind: Option<crate::domain::WaitKind>,
 }
 
 fn read_request(stream: &mut std::net::TcpStream) -> Result<Request, crate::error::AppError> {
@@ -85,6 +137,7 @@ fn read_request(stream: &mut std::net::TcpStream) -> Result<Request, crate::erro
         ));
     }
     let mut headers_terminated = false;
+    let mut content_length = None;
     for _ in 0..MAX_HEADERS {
         let mut header = String::new();
         let read = std::io::BufRead::read_line(&mut reader, &mut header).map_err(|error| {
@@ -93,6 +146,35 @@ fn read_request(stream: &mut std::net::TcpStream) -> Result<Request, crate::erro
         if read == 0 || header == "\r\n" || header == "\n" {
             headers_terminated = true;
             break;
+        }
+        let (name, value) = header.split_once(':').ok_or_else(|| {
+            crate::error::AppError::InvalidInput("web request has an invalid header".to_owned())
+        })?;
+        match name.trim().to_ascii_lowercase().as_str() {
+            "content-length" => {
+                if content_length.is_some() {
+                    return Err(crate::error::AppError::InvalidInput(
+                        "web request has duplicate content-length headers".to_owned(),
+                    ));
+                }
+                let length = value.trim().parse::<usize>().map_err(|_| {
+                    crate::error::AppError::InvalidInput(
+                        "web request content-length is invalid".to_owned(),
+                    )
+                })?;
+                if length > MAX_REQUEST_BODY {
+                    return Err(crate::error::AppError::InvalidInput(
+                        "web request body is too large".to_owned(),
+                    ));
+                }
+                content_length = Some(length);
+            }
+            "transfer-encoding" => {
+                return Err(crate::error::AppError::InvalidInput(
+                    "web request transfer-encoding is unsupported".to_owned(),
+                ));
+            }
+            _ => {}
         }
     }
     if !headers_terminated {
@@ -104,18 +186,32 @@ fn read_request(stream: &mut std::net::TcpStream) -> Result<Request, crate::erro
     let (raw_path, raw_query) = target.split_once('?').unwrap_or((target, ""));
     let path = percent_decode(raw_path)?;
     let query = parse_query(raw_query)?;
+    let mut body = vec![0; content_length.unwrap_or(0)];
+    if !body.is_empty() {
+        std::io::Read::read_exact(&mut reader, &mut body).map_err(|error| {
+            crate::error::AppError::InvalidInput(format!(
+                "could not read web request body: {error}"
+            ))
+        })?;
+    }
     Ok(Request {
         method: method.to_owned(),
         path,
         query,
+        body,
     })
 }
 
 fn route_request(database_path: &std::path::Path, request: &Request) -> HttpResponse {
+    if request.method == "POST" && request.path.starts_with("/api/decisions/") {
+        return resolve_decision_route(database_path, request);
+    }
     if request.method != "GET" {
         return error_response(
             405,
-            crate::error::AppError::InvalidInput("web UI only supports GET".to_owned()),
+            crate::error::AppError::InvalidInput(
+                "web UI only supports GET and decision resolution POST".to_owned(),
+            ),
         );
     }
 
@@ -124,13 +220,18 @@ fn route_request(database_path: &std::path::Path, request: &Request) -> HttpResp
         "/app.css" => HttpResponse::text(200, "text/css; charset=utf-8", APP_CSS),
         "/state.js" => HttpResponse::text(200, "text/javascript; charset=utf-8", STATE_JS),
         "/app.js" => HttpResponse::text(200, "text/javascript; charset=utf-8", APP_JS),
-        "/api/status" => with_database(database_path, |app| app.status().map(json_success)),
+        "/api/status" => with_database(database_path, |app| web_status(app).map(json_success)),
         "/api/projects" => {
             with_database(database_path, |app| app.list_projects().map(json_success))
         }
         "/api/issues" => with_database(database_path, |app| {
             let filter = issue_filter(&request.query)?;
-            app.list_issues(&filter).map(json_success)
+            let issues = app.list_issues(&filter)?;
+            issues
+                .into_iter()
+                .map(|item| web_issue_item(app, item))
+                .collect::<Result<Vec<_>, _>>()
+                .map(json_success)
         }),
         path if path.starts_with("/api/issues/") => {
             let number = path
@@ -155,17 +256,204 @@ fn route_request(database_path: &std::path::Path, request: &Request) -> HttpResp
             with_database(database_path, |app| {
                 let issue = app.show_issue(project, number)?;
                 let history = app.issue_history(project, number)?;
-                Ok(json_success(serde_json::json!({
-                    "project": project,
-                    "issue": issue,
-                    "history": history,
-                })))
+                let decisions = app.list_decisions(project, number)?;
+                let dependencies = app.list_dependencies(&format!("{project}#{number}"), None)?;
+                let item = crate::domain::IssueListItem {
+                    project: project.clone(),
+                    issue: issue.clone(),
+                };
+                let wait = web_wait_context(app, &item, &decisions)?;
+                Ok(json_success(WebIssueDetail {
+                    project: project.clone(),
+                    issue,
+                    history,
+                    decisions,
+                    dependencies,
+                    wait,
+                }))
             })
         }
         _ => error_response(
             404,
             crate::error::AppError::NotFound("web route not found".to_owned()),
         ),
+    }
+}
+
+fn resolve_decision_route(database_path: &std::path::Path, request: &Request) -> HttpResponse {
+    let request_id = request
+        .path
+        .strip_prefix("/api/decisions/")
+        .and_then(|path| path.strip_suffix("/resolve"))
+        .filter(|value| !value.is_empty() && !value.contains('/'));
+    let Some(request_id) = request_id else {
+        return error_response(
+            404,
+            crate::error::AppError::NotFound("web route not found".to_owned()),
+        );
+    };
+    let request_id = match uuid::Uuid::parse_str(request_id) {
+        Ok(request_id) => request_id,
+        Err(_) => {
+            return error_response(
+                400,
+                crate::error::AppError::InvalidInput(
+                    "decision request id must be a UUID".to_owned(),
+                ),
+            );
+        }
+    };
+    let payload: ResolveDecisionRequest = match serde_json::from_slice(&request.body) {
+        Ok(payload) => payload,
+        Err(_) => {
+            return error_response(
+                400,
+                crate::error::AppError::InvalidInput(
+                    "decision resolution body must be valid JSON".to_owned(),
+                ),
+            );
+        }
+    };
+    if payload.next_state == crate::domain::IssueState::InProgress {
+        return error_response(
+            400,
+            crate::error::AppError::InvalidInput(
+                "decision resolution next_state must be todo, blocked, done, or cancelled"
+                    .to_owned(),
+            ),
+        );
+    }
+    with_database(database_path, |app| {
+        let context = crate::domain::ExecutionContext::resolve()?;
+        let resolution = crate::domain::DecisionResolutionInput::new(
+            payload.next_state,
+            payload.summary,
+            payload.verification,
+            payload.reason,
+            payload.wait_kind,
+        );
+        app.resolve_decision(
+            &request_id.to_string(),
+            &payload.answer,
+            Some(payload.expected_revision),
+            resolution,
+            &context,
+        )
+        .map(json_success)
+    })
+}
+
+fn web_status(app: &mut crate::app::App) -> Result<WebStatus, crate::error::AppError> {
+    let status = app.status()?;
+    Ok(WebStatus {
+        attention: web_issue_items(app, status.attention)?,
+        stale: web_issue_items(app, status.stale)?,
+        blocked: web_issue_items(app, status.blocked)?,
+        recently_completed: web_issue_items(app, status.recently_completed)?,
+        active: web_issue_items(app, status.active)?,
+    })
+}
+
+fn web_issue_items(
+    app: &mut crate::app::App,
+    items: Vec<crate::domain::IssueListItem>,
+) -> Result<Vec<WebIssueItem>, crate::error::AppError> {
+    items
+        .into_iter()
+        .map(|item| web_issue_item(app, item))
+        .collect()
+}
+
+fn web_issue_item(
+    app: &mut crate::app::App,
+    item: crate::domain::IssueListItem,
+) -> Result<WebIssueItem, crate::error::AppError> {
+    let decisions = app.list_decisions(&item.project, item.issue.number)?;
+    let unresolved_decisions = decisions
+        .iter()
+        .filter(|decision| decision.status == "open")
+        .collect::<Vec<_>>();
+    let wait = web_wait_context(app, &item, &decisions)?;
+    Ok(WebIssueItem {
+        item,
+        wait,
+        unresolved_decision_count: unresolved_decisions.len(),
+        decision_questions: unresolved_decisions
+            .into_iter()
+            .map(|decision| decision.question.clone())
+            .collect(),
+    })
+}
+
+fn web_wait_context(
+    app: &mut crate::app::App,
+    item: &crate::domain::IssueListItem,
+    decisions: &[crate::domain::DecisionRequest],
+) -> Result<Option<WebWait>, crate::error::AppError> {
+    if decisions.iter().any(|decision| decision.status == "open") {
+        return Ok(Some(WebWait {
+            kind: Some(crate::domain::WaitKind::Human),
+            label: wait_kind_label(crate::domain::WaitKind::Human).to_owned(),
+            reason: "A human decision is required".to_owned(),
+        }));
+    }
+    if item.issue.state != crate::domain::IssueState::Blocked {
+        return Ok(None);
+    }
+
+    let history = app.issue_history(&item.project, item.issue.number)?;
+    if let Some(event) = history
+        .iter()
+        .rev()
+        .find(|event| event.event_type == "issue_blocked")
+    {
+        let kind = event
+            .metadata
+            .get("wait_kind")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok());
+        let reason = event
+            .metadata
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .filter(|reason| !reason.trim().is_empty())
+            .unwrap_or("Waiting details are not recorded")
+            .to_owned();
+        return Ok(Some(WebWait {
+            label: kind
+                .map(wait_kind_label)
+                .unwrap_or("Waiting reason")
+                .to_owned(),
+            kind,
+            reason,
+        }));
+    }
+
+    let reference = format!("{}#{}", item.project, item.issue.number);
+    let dependencies = app.list_dependencies(&reference, None)?;
+    if dependencies
+        .iter()
+        .any(|dependency| dependency.blocked == reference)
+    {
+        return Ok(Some(WebWait {
+            kind: Some(crate::domain::WaitKind::Dependency),
+            label: wait_kind_label(crate::domain::WaitKind::Dependency).to_owned(),
+            reason: "Waiting for a blocking dependency".to_owned(),
+        }));
+    }
+
+    Ok(Some(WebWait {
+        kind: None,
+        label: "Waiting reason".to_owned(),
+        reason: "Waiting details are not recorded".to_owned(),
+    }))
+}
+
+fn wait_kind_label(kind: crate::domain::WaitKind) -> &'static str {
+    match kind {
+        crate::domain::WaitKind::Human => "Human decision",
+        crate::domain::WaitKind::Dependency => "Blocking dependency",
+        crate::domain::WaitKind::External => "External system",
     }
 }
 
@@ -330,4 +618,19 @@ fn write_response(
     )
     .and_then(|()| stream.write_all(&response.body))
     .map_err(|error| crate::error::AppError::Internal(format!("could not write web response: {error}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::status_code;
+
+    #[test]
+    fn database_busy_is_exposed_as_service_unavailable() {
+        assert_eq!(
+            status_code(&crate::error::AppError::DatabaseBusy(
+                "database is busy".to_owned()
+            )),
+            503
+        );
+    }
 }

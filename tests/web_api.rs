@@ -41,11 +41,20 @@ impl WebProcess {
         self.request("GET", path)
     }
 
-    fn request(&self, method: &str, path: &str) -> (u16, String) {
-        Self::request_at(&self.address, method, path)
+    fn post_json(&self, path: &str, body: &serde_json::Value) -> (u16, String) {
+        let body = body.to_string();
+        self.request_with_body("POST", path, &body)
     }
 
-    fn request_at(address: &str, method: &str, path: &str) -> (u16, String) {
+    fn request(&self, method: &str, path: &str) -> (u16, String) {
+        self.request_with_body(method, path, "")
+    }
+
+    fn request_with_body(&self, method: &str, path: &str, body: &str) -> (u16, String) {
+        Self::request_at(&self.address, method, path, body)
+    }
+
+    fn request_at(address: &str, method: &str, path: &str, body: &str) -> (u16, String) {
         let address = address.trim_start_matches("http://");
         let mut stream = TcpStream::connect(address).unwrap();
         stream
@@ -53,7 +62,8 @@ impl WebProcess {
             .unwrap();
         write!(
             stream,
-            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
         )
         .unwrap();
         let mut response = String::new();
@@ -70,6 +80,33 @@ impl WebProcess {
             .unwrap();
         (status, body.to_owned())
     }
+}
+
+fn request_decision(app: &support::TestApp, question: &str, session: &str) -> serde_json::Value {
+    let output = app
+        .command()
+        .env("BETTR_AGENT", "codex")
+        .env("BETTR_SESSION_ID", session)
+        .args([
+            "decision",
+            "request",
+            "1",
+            "--project",
+            "bettr",
+            "--question",
+            question,
+            "--background",
+            "The implementation has two compatible choices.",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["data"].clone()
 }
 
 impl Drop for WebProcess {
@@ -203,6 +240,305 @@ fn web_serves_project_issue_detail_with_activity() {
 }
 
 #[test]
+fn web_exposes_waiting_context_and_multiple_decisions() {
+    let app = initialize_app();
+    let first = request_decision(&app, "Which parser should be used?", "session-a");
+    request_decision(&app, "Which rollout should be used?", "session-b");
+    let server = WebProcess::start(&app);
+
+    let (status, body) = server.get("/api/status");
+    assert_eq!(status, 200);
+    let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        response["data"]["attention"][0]["unresolved_decision_count"],
+        2
+    );
+    assert_eq!(
+        response["data"]["attention"][0]["wait"]["label"],
+        "Human decision"
+    );
+    assert_eq!(
+        response["data"]["attention"][0]["decision_questions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let (status, body) = server.get("/api/issues?project=bettr&include_done=true");
+    assert_eq!(status, 200);
+    let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        response["data"][0]["wait"]["reason"],
+        "A human decision is required"
+    );
+
+    let (status, body) = server.get("/api/issues/1?project=bettr");
+    assert_eq!(status, 200);
+    let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(response["data"]["decisions"].as_array().unwrap().len(), 2);
+    assert_eq!(response["data"]["decisions"][0]["id"], first["id"]);
+    assert_eq!(response["data"]["wait"]["label"], "Human decision");
+    assert!(
+        response["data"]["wait"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("human")
+    );
+}
+
+#[test]
+fn web_exposes_existing_block_reason_and_wait_kind() {
+    let app = initialize_app();
+    app.command()
+        .env("BETTR_AGENT", "codex")
+        .env("BETTR_SESSION_ID", "session-a")
+        .args([
+            "issue",
+            "start",
+            "1",
+            "--project",
+            "bettr",
+            "--revision",
+            "1",
+            "--json",
+        ])
+        .assert()
+        .success();
+    app.command()
+        .env("BETTR_AGENT", "codex")
+        .env("BETTR_SESSION_ID", "session-a")
+        .args([
+            "issue",
+            "block",
+            "1",
+            "--project",
+            "bettr",
+            "--revision",
+            "2",
+            "--reason",
+            "Waiting for the deployment window.",
+            "--wait-kind",
+            "external",
+            "--json",
+        ])
+        .assert()
+        .success();
+    let server = WebProcess::start(&app);
+
+    let (status, body) = server.get("/api/status");
+    assert_eq!(status, 200);
+    let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(response["data"]["blocked"][0]["wait"]["kind"], "external");
+    assert_eq!(
+        response["data"]["blocked"][0]["wait"]["label"],
+        "External system"
+    );
+    assert_eq!(
+        response["data"]["blocked"][0]["wait"]["reason"],
+        "Waiting for the deployment window."
+    );
+}
+
+#[test]
+fn web_resolves_a_decision_with_the_existing_human_contract() {
+    let app = initialize_app();
+    let request = request_decision(&app, "Which parser should be used?", "session-a");
+    let server = WebProcess::start(&app);
+
+    let (_, detail_body) = server.get("/api/issues/1?project=bettr");
+    let detail: serde_json::Value = serde_json::from_str(&detail_body).unwrap();
+    let revision = detail["data"]["issue"]["revision"].as_i64().unwrap();
+    let request_id = request["id"].as_str().unwrap();
+    let (status, body) = server.post_json(
+        &format!("/api/decisions/{request_id}/resolve"),
+        &serde_json::json!({
+            "expected_revision": revision,
+            "answer": "Use the streaming parser.",
+            "next_state": "todo"
+        }),
+    );
+
+    assert_eq!(status, 200);
+    let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(response["data"]["status"], "resolved");
+    assert_eq!(response["data"]["resolver_kind"], "human");
+
+    let (status, body) = server.get("/api/issues/1?project=bettr");
+    assert_eq!(status, 200);
+    let detail: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(detail["data"]["issue"]["state"], "todo");
+    assert_eq!(detail["data"]["decisions"][0]["status"], "resolved");
+    assert_eq!(
+        detail["data"]["history"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["event_type"],
+        "decision_resolved"
+    );
+}
+
+#[test]
+fn web_rejects_a_stale_revision_without_resolving_the_decision() {
+    let app = initialize_app();
+    let request = request_decision(&app, "Which parser should be used?", "session-a");
+    let server = WebProcess::start(&app);
+
+    let (_, detail_body) = server.get("/api/issues/1?project=bettr");
+    let detail: serde_json::Value = serde_json::from_str(&detail_body).unwrap();
+    let revision = detail["data"]["issue"]["revision"].as_i64().unwrap();
+    app.command()
+        .args([
+            "issue",
+            "edit",
+            "1",
+            "--project",
+            "bettr",
+            "--revision",
+            &revision.to_string(),
+            "--title",
+            "Changed while reviewing",
+        ])
+        .assert()
+        .success();
+
+    let (status, body) = server.post_json(
+        &format!("/api/decisions/{}/resolve", request["id"].as_str().unwrap()),
+        &serde_json::json!({
+            "expected_revision": revision,
+            "answer": "Use option A.",
+            "next_state": "todo"
+        }),
+    );
+
+    assert_eq!(status, 409);
+    let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(response["error"]["code"], "revision_conflict");
+    let (_, detail_body) = server.get("/api/issues/1?project=bettr");
+    let detail: serde_json::Value = serde_json::from_str(&detail_body).unwrap();
+    assert_eq!(detail["data"]["issue"]["state"], "blocked");
+    assert_eq!(detail["data"]["decisions"][0]["status"], "open");
+}
+
+#[test]
+fn web_keeps_done_resolution_blocked_when_another_decision_is_open() {
+    let app = initialize_app();
+    let first = request_decision(&app, "Which parser should be used?", "session-a");
+    request_decision(&app, "Which rollout should be used?", "session-b");
+    let server = WebProcess::start(&app);
+
+    let (_, detail_body) = server.get("/api/issues/1?project=bettr");
+    let detail: serde_json::Value = serde_json::from_str(&detail_body).unwrap();
+    let revision = detail["data"]["issue"]["revision"].as_i64().unwrap();
+    let (status, body) = server.post_json(
+        &format!("/api/decisions/{}/resolve", first["id"].as_str().unwrap()),
+        &serde_json::json!({
+            "expected_revision": revision,
+            "answer": "Use option A.",
+            "next_state": "done",
+            "summary": "Selected option A.",
+            "verification": "Reviewed the integration tests."
+        }),
+    );
+
+    assert_eq!(status, 409);
+    let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(response["error"]["code"], "conflict");
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("another unresolved")
+    );
+    let (_, detail_body) = server.get("/api/issues/1?project=bettr");
+    let detail: serde_json::Value = serde_json::from_str(&detail_body).unwrap();
+    assert_eq!(detail["data"]["issue"]["state"], "blocked");
+    assert_eq!(detail["data"]["decisions"][0]["status"], "open");
+}
+
+#[test]
+fn web_rejects_invalid_resolution_input_without_mutating_the_decision() {
+    let app = initialize_app();
+    let request = request_decision(&app, "Which parser should be used?", "session-a");
+    let server = WebProcess::start(&app);
+    let (_, detail_body) = server.get("/api/issues/1?project=bettr");
+    let detail: serde_json::Value = serde_json::from_str(&detail_body).unwrap();
+    let revision = detail["data"]["issue"]["revision"].as_i64().unwrap();
+    let path = format!("/api/decisions/{}/resolve", request["id"].as_str().unwrap());
+
+    for body in [
+        serde_json::json!({"answer": "Use option A.", "next_state": "todo"}),
+        serde_json::json!({
+            "expected_revision": revision,
+            "answer": "Use option A.",
+            "next_state": "todo",
+            "unexpected": true
+        }),
+        serde_json::json!({
+            "expected_revision": revision,
+            "answer": "Use option A.",
+            "next_state": "in_progress"
+        }),
+        serde_json::json!({
+            "expected_revision": revision,
+            "answer": "Use option A.",
+            "next_state": "blocked"
+        }),
+        serde_json::json!({
+            "expected_revision": revision,
+            "answer": "Use option A.",
+            "next_state": "done"
+        }),
+        serde_json::json!({
+            "expected_revision": revision,
+            "answer": "Use option A.",
+            "next_state": "cancelled"
+        }),
+    ] {
+        let (status, response_body) = server.post_json(&path, &body);
+        assert_eq!(status, 400, "{response_body}");
+        let response: serde_json::Value = serde_json::from_str(&response_body).unwrap();
+        assert_eq!(response["error"]["code"], "invalid_input");
+    }
+
+    let (_, detail_body) = server.get("/api/issues/1?project=bettr");
+    let detail: serde_json::Value = serde_json::from_str(&detail_body).unwrap();
+    assert_eq!(detail["data"]["issue"]["revision"], revision);
+    assert_eq!(detail["data"]["issue"]["state"], "blocked");
+    assert_eq!(detail["data"]["decisions"][0]["status"], "open");
+}
+
+#[test]
+fn web_treats_a_second_submission_as_a_conflict_without_replaying_it() {
+    let app = initialize_app();
+    let request = request_decision(&app, "Which parser should be used?", "session-a");
+    let server = WebProcess::start(&app);
+    let (_, detail_body) = server.get("/api/issues/1?project=bettr");
+    let detail: serde_json::Value = serde_json::from_str(&detail_body).unwrap();
+    let revision = detail["data"]["issue"]["revision"].as_i64().unwrap();
+    let path = format!("/api/decisions/{}/resolve", request["id"].as_str().unwrap());
+    let body = serde_json::json!({
+        "expected_revision": revision,
+        "answer": "Use option A.",
+        "next_state": "todo"
+    });
+
+    let (status, _) = server.post_json(&path, &body);
+    assert_eq!(status, 200);
+    let (status, response_body) = server.post_json(&path, &body);
+    assert_eq!(status, 409);
+    let response: serde_json::Value = serde_json::from_str(&response_body).unwrap();
+    assert_eq!(response["error"]["code"], "conflict");
+
+    let (_, detail_body) = server.get("/api/issues/1?project=bettr");
+    let detail: serde_json::Value = serde_json::from_str(&detail_body).unwrap();
+    assert_eq!(detail["data"]["issue"]["revision"], revision + 1);
+    assert_eq!(detail["data"]["issue"]["state"], "todo");
+    assert_eq!(detail["data"]["decisions"][0]["status"], "resolved");
+}
+
+#[test]
 fn web_returns_json_not_found_for_unknown_routes() {
     let app = initialize_app();
     let server = WebProcess::start(&app);
@@ -249,7 +585,7 @@ fn web_serves_concurrent_read_requests() {
     let requests = (0..4)
         .map(|_| {
             let address = address.clone();
-            std::thread::spawn(move || WebProcess::request_at(&address, "GET", "/api/status"))
+            std::thread::spawn(move || WebProcess::request_at(&address, "GET", "/api/status", ""))
         })
         .collect::<Vec<_>>();
     for request in requests {
