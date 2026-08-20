@@ -26,4 +26,11 @@ fn help_names_the_product_and_core_commands() {
         .assert()
         .success()
         .stdout(predicate::str::contains("--port"));
+
+    Command::cargo_bin("bettr")
+        .unwrap()
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
 }

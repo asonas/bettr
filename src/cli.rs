@@ -1,5 +1,5 @@
 #[derive(clap::Parser, Debug)]
-#[command(name = "bettr", about = "Local issue tracking for agent work")]
+#[command(name = "bettr", about = "Local issue tracking for agent work", version)]
 pub struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     pub database: Option<std::path::PathBuf>,
