@@ -178,6 +178,15 @@ pub fn write_comment_human(comment: &crate::domain::Comment) {
     println!("{}", escape_terminal_controls(&comment.body));
 }
 
+pub fn write_redaction_human(result: &crate::domain::RedactionResult) {
+    println!(
+        "redacted {} {} ({} records)",
+        escape_terminal_controls(&result.target_type),
+        result.target_id,
+        result.changed_count
+    );
+}
+
 pub fn write_issue_history_human(events: &[crate::domain::DomainEvent]) {
     for event in events {
         let revision = event

@@ -121,7 +121,10 @@ The JSON response contract is documented in [`docs/json-contract.md`](docs/json-
 - bettr stores data locally in SQLite.
 - bettr does not start agents, share data over a network, or use external databases.
 - The web UI binds only to the loopback interface.
-- Backup and restore, redaction, and JSONL audit export are not currently available.
+- JSONL audit export and redaction are available capabilities; backup and restore,
+  retention, and `doctor` diagnostics remain future work. See
+  [`contracts/capabilities.json`](contracts/capabilities.json) for the
+  machine-readable availability matrix.
 
 ## License
 

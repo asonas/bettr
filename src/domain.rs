@@ -779,6 +779,15 @@ pub struct Status {
     pub active: Vec<IssueListItem>,
 }
 
+pub const REDACTED_TEXT: &str = "[REDACTED]";
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct RedactionResult {
+    pub target_type: String,
+    pub target_id: uuid::Uuid,
+    pub changed_count: u64,
+}
+
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct NewIssue {
     pub title: String,

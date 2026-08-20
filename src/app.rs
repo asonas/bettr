@@ -431,6 +431,88 @@ impl App {
         )
     }
 
+    pub fn redact_issue(
+        &mut self,
+        project: &str,
+        number: i64,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::RedactionResult, crate::error::AppError> {
+        self.run_redaction(
+            "redact_issue",
+            Some(project),
+            serde_json::json!({ "project": project, "number": number }),
+            context,
+            |database| database.redact_issue(project, number, context),
+        )
+    }
+
+    pub fn redact_comment(
+        &mut self,
+        id: uuid::Uuid,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::RedactionResult, crate::error::AppError> {
+        self.run_redaction(
+            "redact_comment",
+            None,
+            serde_json::json!({ "id": id }),
+            context,
+            |database| database.redact_comment(id, context),
+        )
+    }
+
+    pub fn redact_audit(
+        &mut self,
+        id: uuid::Uuid,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::RedactionResult, crate::error::AppError> {
+        self.run_redaction(
+            "redact_audit",
+            None,
+            serde_json::json!({ "id": id }),
+            context,
+            |database| database.redact_audit(id, context),
+        )
+    }
+
+    fn run_redaction<F>(
+        &mut self,
+        operation: &'static str,
+        project: Option<&str>,
+        payload: serde_json::Value,
+        context: &crate::domain::ExecutionContext,
+        action: F,
+    ) -> Result<crate::domain::RedactionResult, crate::error::AppError>
+    where
+        F: FnOnce(
+            &mut crate::store::Database,
+        ) -> Result<crate::domain::RedactionResult, crate::error::AppError>,
+    {
+        let started_at = chrono::Utc::now();
+        let subject = project
+            .map(|project| self.database.project_audit_subject(project))
+            .unwrap_or_default();
+        let idempotency = self.idempotency_request(operation, payload, context)?;
+        let result = if context.kind == crate::domain::InitiatorKind::Human {
+            self.database.with_idempotency(idempotency, action)
+        } else {
+            Err(crate::error::AppError::Conflict(
+                "redaction requires a human execution context".to_owned(),
+            ))
+        };
+        match result {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                if let Err(audit_error) = self
+                    .database
+                    .record_failed_operation(operation, context, &error, &subject, started_at)
+                {
+                    return Err(Self::failure_audit_error(operation, &error, &audit_error));
+                }
+                Err(error)
+            }
+        }
+    }
+
     fn run_audit_tool<T, F, M>(
         &mut self,
         operation: &str,
@@ -1756,6 +1838,7 @@ impl App {
                 ("capabilities", true),
                 ("idempotency", true),
                 ("audit_jsonl", true),
+                ("redaction", true),
             ]
             .into_iter()
             .collect(),

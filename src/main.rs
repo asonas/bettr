@@ -603,6 +603,30 @@ fn run(
             }
             Ok(())
         }
+        crate::cli::Command::Redact(redact_command) => {
+            let database = crate::store::Database::open(&database_path)?;
+            let mut app =
+                crate::app::App::new(database).with_idempotency_key(idempotency_key.clone())?;
+            let context = crate::domain::ExecutionContext::resolve()?;
+            let result = match redact_command.command {
+                crate::cli::RedactSubcommand::Issue(command) => {
+                    let project =
+                        crate::require_project(&mut app, project.as_deref(), "redact_issue")?;
+                    app.redact_issue(project, command.number, &context)
+                }
+                crate::cli::RedactSubcommand::Comment(command) => {
+                    app.redact_comment(command.id, &context)
+                }
+                crate::cli::RedactSubcommand::Audit(command) => {
+                    app.redact_audit(command.id, &context)
+                }
+            }?;
+            match output_mode {
+                crate::output::OutputMode::Human => crate::output::write_redaction_human(&result),
+                crate::output::OutputMode::Json => crate::output::write_success(result),
+            }
+            Ok(())
+        }
         crate::cli::Command::Context(_) => {
             if database_path.is_file()
                 && let Ok(database) = crate::store::Database::open(&database_path)

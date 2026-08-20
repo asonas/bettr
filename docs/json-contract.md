@@ -132,6 +132,20 @@ Each `audit list --json` event includes `changed_fields`, an ordered array of al
 
 `audit archive --json` atomically moves a valid active JSONL file to a UTC timestamped generation and creates a new active file. The SQLite cursor is preserved, so the next automatically projected event continues from the archived tail hash. `audit rebuild --json` regenerates the complete active file from SQLite `audit_events` through a temporary verified file, then updates `audit_jsonl_cursor` in the same transaction. A failed rebuild leaves the previous active file in place.
 
+## Redaction
+
+When the `redaction` capability is `true`, the following explicit selectors are available:
+
+```sh
+bettr redact issue 12 --project bettr --json
+bettr redact comment <comment-uuid> --json
+bettr redact audit <audit-event-uuid> --json
+```
+
+Redaction requires a human execution context. Issue redaction covers the Issue, related comments and decision text, Issue history metadata, matching idempotency responses/request hashes, and audit metadata for that Issue. Comment redaction covers the selected comment, matching history/idempotency/audit metadata. Audit redaction covers only the selected SQLite audit row. Text values become `[REDACTED]`; JSON metadata retains only safe structural fields and marks the result as redacted. The success data contains only `target_type`, `target_id`, and `changed_count`.
+
+Each redaction mutates SQLite under one `BEGIN IMMEDIATE` transaction and appends a safe success or failure audit event. Repeating a completed redaction succeeds without changing already-safe content. Missing targets return `not_found`; agent execution returns `conflict`. Existing JSONL lines and their hashes are never rewritten because the JSONL projection excludes redacted content and audit metadata. The redaction event is appended on the next normal flush. Existing backups made before redaction are not rewritten and must be treated as sensitive artifacts; retention and automatic deletion are not implemented.
+
 Integrity failures use `error.code: "audit_integrity_failure"` and exit code 10. File-operation failures use `error.code: "audit_operation_failed"` and exit code 10. Integrity error details may contain `line` and `sequence`, plus the fixed recovery instruction `preserve the affected JSONL and run bettr audit rebuild --json`; they never contain raw command arguments or file contents.
 
 ## Issue references

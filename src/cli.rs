@@ -99,6 +99,10 @@ impl AuditInvocation {
             ("audit", Some("archive")) => "audit_archive",
             ("audit", Some("rebuild")) => "audit_rebuild",
             ("audit", _) => "audit",
+            ("redact", Some("issue")) => "redact_issue",
+            ("redact", Some("comment")) => "redact_comment",
+            ("redact", Some("audit")) => "redact_audit",
+            ("redact", _) => "redact",
             ("context", _) => "context",
             ("self-update", _) => "self_update",
             ("web", _) => "web",
@@ -122,6 +126,7 @@ pub enum Command {
     Capabilities(CapabilitiesCommand),
     Status(StatusCommand),
     Audit(AuditCommand),
+    Redact(RedactCommand),
     Context(ContextCommand),
     SelfUpdate(SelfUpdateCommand),
     Web(WebCommand),
@@ -564,6 +569,34 @@ pub struct AuditArchiveCommand {}
 
 #[derive(clap::Args, Debug)]
 pub struct AuditRebuildCommand {}
+
+#[derive(clap::Args, Debug)]
+pub struct RedactCommand {
+    #[command(subcommand)]
+    pub command: RedactSubcommand,
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum RedactSubcommand {
+    Issue(RedactIssueCommand),
+    Comment(RedactCommentCommand),
+    Audit(RedactAuditCommand),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RedactIssueCommand {
+    pub number: i64,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RedactCommentCommand {
+    pub id: uuid::Uuid,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RedactAuditCommand {
+    pub id: uuid::Uuid,
+}
 
 #[derive(clap::Args, Debug)]
 pub struct ContextCommand {}

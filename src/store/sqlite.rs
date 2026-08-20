@@ -146,6 +146,23 @@ pub(crate) struct AuditedResult<T> {
     pub subject: AuditSubject,
 }
 
+enum RedactionTarget {
+    Issue { project_name: String, number: i64 },
+    Comment { id: uuid::Uuid },
+    Audit { id: uuid::Uuid },
+}
+
+struct RedactionWork {
+    target_type: String,
+    target_id: uuid::Uuid,
+    project: Option<(uuid::Uuid, String)>,
+    revision: Option<i64>,
+    changed_count: u64,
+}
+
+const REDACTED_JSON: &str = r#"{"redacted":true}"#;
+const REDACTED_HASH: &str = "[REDACTED]";
+
 impl Database {
     pub(crate) fn with_idempotency<T, F>(
         &mut self,
@@ -1292,6 +1309,267 @@ impl Database {
             Ok(comment)
         })();
         AuditedResult { result, subject }
+    }
+
+    pub fn redact_issue(
+        &mut self,
+        project_name: &str,
+        number: i64,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::RedactionResult, crate::error::AppError> {
+        self.redact_target(
+            RedactionTarget::Issue {
+                project_name: project_name.to_owned(),
+                number,
+            },
+            context,
+        )
+    }
+
+    pub fn redact_comment(
+        &mut self,
+        id: uuid::Uuid,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::RedactionResult, crate::error::AppError> {
+        self.redact_target(RedactionTarget::Comment { id }, context)
+    }
+
+    pub fn redact_audit(
+        &mut self,
+        id: uuid::Uuid,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::RedactionResult, crate::error::AppError> {
+        self.redact_target(RedactionTarget::Audit { id }, context)
+    }
+
+    fn redact_target(
+        &mut self,
+        target: RedactionTarget,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::RedactionResult, crate::error::AppError> {
+        if context.kind != crate::domain::InitiatorKind::Human {
+            return Err(crate::error::AppError::Conflict(
+                "redaction requires a human execution context".to_owned(),
+            ));
+        }
+        let operation = match &target {
+            RedactionTarget::Issue { .. } => "redact_issue",
+            RedactionTarget::Comment { .. } => "redact_comment",
+            RedactionTarget::Audit { .. } => "redact_audit",
+        };
+        let idempotency = self.take_idempotency(operation)?;
+        let started_at = chrono::Utc::now();
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::AppError::from)?;
+        if let Some(result) = Self::check_idempotency(&transaction, idempotency.as_ref())? {
+            transaction.commit().map_err(crate::error::AppError::from)?;
+            return Ok(result);
+        }
+
+        let work = match target {
+            RedactionTarget::Issue {
+                project_name,
+                number,
+            } => Self::redact_issue_in_transaction(&transaction, &project_name, number)?,
+            RedactionTarget::Comment { id } => {
+                Self::redact_comment_in_transaction(&transaction, id)?
+            }
+            RedactionTarget::Audit { id } => Self::redact_audit_in_transaction(&transaction, id)?,
+        };
+        let result = crate::domain::RedactionResult {
+            target_type: work.target_type.clone(),
+            target_id: work.target_id,
+            changed_count: work.changed_count,
+        };
+        let target_type = work.target_type;
+        let target_id = work.target_id.to_string();
+        let metadata_json = serde_json::json!({
+            "redacted": true,
+            "changed_count": work.changed_count,
+        })
+        .to_string();
+        Self::insert_audit_event(
+            &transaction,
+            AuditInsert {
+                operation,
+                idempotency_key: None,
+                success: true,
+                context,
+                target: Some((&target_type, &target_id)),
+                project: work
+                    .project
+                    .as_ref()
+                    .map(|(project_id, project_name)| (*project_id, project_name.as_str())),
+                revision: work.revision,
+                started_at,
+                exit_code: 0,
+                changed_fields: &["redacted"],
+                metadata_json: &metadata_json,
+            },
+        )?;
+        Self::remember_idempotency(&transaction, idempotency.as_ref(), &result)?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(result)
+    }
+
+    fn redact_issue_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        project_name: &str,
+        number: i64,
+    ) -> Result<RedactionWork, crate::error::AppError> {
+        if number < 1 {
+            return Err(crate::error::AppError::InvalidInput(
+                "issue number must be positive".to_owned(),
+            ));
+        }
+        let project_id = Self::project_id_in_transaction(transaction, project_name)?;
+        let issue = Self::issue_in_transaction(transaction, project_id, number)?;
+        let issue_id = issue.id.to_string();
+        let issue_reference = format!("{project_name}#{number}");
+        let mut changed_count = u64::try_from(
+            transaction
+                .execute(
+                    "UPDATE issues
+                     SET title = ?1,
+                         body = CASE WHEN body IS NULL THEN NULL ELSE ?1 END
+                     WHERE id = ?2
+                       AND (title <> ?1 OR (body IS NOT NULL AND body <> ?1))",
+                    rusqlite::params![crate::domain::REDACTED_TEXT, issue_id],
+                )
+                .map_err(crate::error::AppError::from)?,
+        )
+        .unwrap_or(u64::MAX);
+        changed_count =
+            changed_count.saturating_add(Self::redact_comments_for_issue(transaction, issue.id)?);
+        changed_count = changed_count
+            .saturating_add(Self::redact_domain_events_for_issue(transaction, issue.id)?);
+        changed_count =
+            changed_count.saturating_add(Self::redact_decisions_for_issue(transaction, issue.id)?);
+        changed_count = changed_count.saturating_add(Self::redact_idempotency_records(
+            transaction,
+            &[issue.id.to_string(), issue_reference],
+        )?);
+        changed_count = changed_count
+            .saturating_add(Self::redact_audit_events_for_issue(transaction, issue.id)?);
+        Ok(RedactionWork {
+            target_type: "issue".to_owned(),
+            target_id: issue.id,
+            project: Some((project_id, project_name.to_owned())),
+            revision: Some(issue.revision),
+            changed_count,
+        })
+    }
+
+    fn redact_comment_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        id: uuid::Uuid,
+    ) -> Result<RedactionWork, crate::error::AppError> {
+        let (issue_id, project_id, project_name, revision): (String, String, String, i64) =
+            transaction
+                .query_row(
+                    "SELECT comment.issue_id, issue.project_id, project.name, issue.revision
+                     FROM comments comment
+                     JOIN issues issue ON issue.id = comment.issue_id
+                     JOIN projects project ON project.id = issue.project_id
+                     WHERE comment.id = ?1",
+                    [id.to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .map_err(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => {
+                        crate::error::AppError::NotFound("comment not found".to_owned())
+                    }
+                    error => crate::error::AppError::from(error),
+                })?;
+        let issue_id = uuid::Uuid::parse_str(&issue_id)
+            .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
+        let project_id = uuid::Uuid::parse_str(&project_id)
+            .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
+        let changed_count = u64::try_from(
+            transaction
+                .execute(
+                    "UPDATE comments
+                     SET body = ?1, metadata_json = ?2
+                     WHERE id = ?3
+                       AND (body <> ?1 OR metadata_json <> ?2)",
+                    rusqlite::params![crate::domain::REDACTED_TEXT, REDACTED_JSON, id.to_string(),],
+                )
+                .map_err(crate::error::AppError::from)?,
+        )
+        .unwrap_or(u64::MAX)
+        .saturating_add(Self::redact_domain_events_for_comment(
+            transaction,
+            issue_id,
+            id,
+        )?)
+        .saturating_add(Self::redact_idempotency_records(
+            transaction,
+            &[id.to_string()],
+        )?)
+        .saturating_add(Self::redact_audit_events_for_comment(
+            transaction,
+            issue_id,
+            id,
+        )?);
+        Ok(RedactionWork {
+            target_type: "comment".to_owned(),
+            target_id: id,
+            project: Some((project_id, project_name)),
+            revision: Some(revision),
+            changed_count,
+        })
+    }
+
+    fn redact_audit_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        id: uuid::Uuid,
+    ) -> Result<RedactionWork, crate::error::AppError> {
+        let (project_id, metadata_json, idempotency_key): (Option<String>, String, Option<String>) =
+            transaction
+                .query_row(
+                    "SELECT project_id, metadata_json, idempotency_key
+                     FROM audit_events WHERE id = ?1",
+                    [id.to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .map_err(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => {
+                        crate::error::AppError::NotFound("audit event not found".to_owned())
+                    }
+                    error => crate::error::AppError::from(error),
+                })?;
+        let changed_count = u64::from(idempotency_key.is_some() || metadata_json != REDACTED_JSON);
+        transaction
+            .execute(
+                "UPDATE audit_events
+                 SET idempotency_key = NULL, metadata_json = ?1
+                 WHERE id = ?2",
+                rusqlite::params![REDACTED_JSON, id.to_string()],
+            )
+            .map_err(crate::error::AppError::from)?;
+        let project = project_id
+            .map(|project_id| {
+                let project_id = uuid::Uuid::parse_str(&project_id)
+                    .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
+                let project_name = transaction
+                    .query_row(
+                        "SELECT name FROM projects WHERE id = ?1",
+                        [project_id.to_string()],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(crate::error::AppError::from)?;
+                Ok::<(uuid::Uuid, String), crate::error::AppError>((project_id, project_name))
+            })
+            .transpose()?;
+        Ok(RedactionWork {
+            target_type: "audit".to_owned(),
+            target_id: id,
+            project,
+            revision: None,
+            changed_count,
+        })
     }
 
     pub fn issue_history(
@@ -3328,6 +3606,414 @@ impl Database {
         transaction.commit().map_err(crate::error::AppError::from)
     }
 
+    fn redact_comments_for_issue(
+        transaction: &rusqlite::Transaction<'_>,
+        issue_id: uuid::Uuid,
+    ) -> Result<u64, crate::error::AppError> {
+        transaction
+            .execute(
+                "UPDATE comments
+                 SET body = ?1, metadata_json = ?2
+                 WHERE issue_id = ?3
+                   AND (body <> ?1 OR metadata_json <> ?2)",
+                rusqlite::params![
+                    crate::domain::REDACTED_TEXT,
+                    REDACTED_JSON,
+                    issue_id.to_string(),
+                ],
+            )
+            .map(u64::try_from)
+            .map_err(crate::error::AppError::from)
+            .and_then(|count| {
+                count.map_err(|_| {
+                    crate::error::AppError::Internal(
+                        "redaction changed count is outside the supported range".to_owned(),
+                    )
+                })
+            })
+    }
+
+    fn redact_decisions_for_issue(
+        transaction: &rusqlite::Transaction<'_>,
+        issue_id: uuid::Uuid,
+    ) -> Result<u64, crate::error::AppError> {
+        transaction
+            .execute(
+                "UPDATE decision_requests
+                 SET question = ?1,
+                     background = ?1,
+                     answer = CASE WHEN answer IS NULL THEN NULL ELSE ?1 END
+                 WHERE issue_id = ?2
+                   AND (question <> ?1 OR background <> ?1
+                        OR (answer IS NOT NULL AND answer <> ?1))",
+                rusqlite::params![crate::domain::REDACTED_TEXT, issue_id.to_string()],
+            )
+            .map(u64::try_from)
+            .map_err(crate::error::AppError::from)
+            .and_then(|count| {
+                count.map_err(|_| {
+                    crate::error::AppError::Internal(
+                        "redaction changed count is outside the supported range".to_owned(),
+                    )
+                })
+            })
+    }
+
+    fn redact_domain_events_for_issue(
+        transaction: &rusqlite::Transaction<'_>,
+        issue_id: uuid::Uuid,
+    ) -> Result<u64, crate::error::AppError> {
+        let mut statement = transaction
+            .prepare(
+                "SELECT id, metadata_json FROM domain_events
+                 WHERE issue_id = ?1 ORDER BY sequence",
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut rows = statement
+            .query([issue_id.to_string()])
+            .map_err(crate::error::AppError::from)?;
+        let mut events = Vec::new();
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
+            events.push((
+                row.get::<_, String>(0)
+                    .map_err(crate::error::AppError::from)?,
+                row.get::<_, String>(1)
+                    .map_err(crate::error::AppError::from)?,
+            ));
+        }
+        drop(rows);
+        drop(statement);
+        let mut changed_count = 0_u64;
+        for (event_id, metadata_json) in events {
+            let redacted = Self::redact_domain_metadata(&metadata_json)?;
+            if redacted == metadata_json {
+                continue;
+            }
+            transaction
+                .execute(
+                    "UPDATE domain_events SET metadata_json = ?1 WHERE id = ?2",
+                    rusqlite::params![redacted, event_id],
+                )
+                .map_err(crate::error::AppError::from)?;
+            changed_count = changed_count.saturating_add(1);
+        }
+        Ok(changed_count)
+    }
+
+    fn redact_domain_events_for_comment(
+        transaction: &rusqlite::Transaction<'_>,
+        issue_id: uuid::Uuid,
+        comment_id: uuid::Uuid,
+    ) -> Result<u64, crate::error::AppError> {
+        let mut statement = transaction
+            .prepare(
+                "SELECT id, metadata_json FROM domain_events
+                 WHERE issue_id = ?1 ORDER BY sequence",
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut rows = statement
+            .query([issue_id.to_string()])
+            .map_err(crate::error::AppError::from)?;
+        let mut events = Vec::new();
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
+            events.push((
+                row.get::<_, String>(0)
+                    .map_err(crate::error::AppError::from)?,
+                row.get::<_, String>(1)
+                    .map_err(crate::error::AppError::from)?,
+            ));
+        }
+        drop(rows);
+        drop(statement);
+        let mut changed_count = 0_u64;
+        for (event_id, metadata_json) in events {
+            let metadata: serde_json::Value =
+                serde_json::from_str(&metadata_json).map_err(|_| {
+                    crate::error::AppError::Internal(
+                        "domain event metadata is not valid JSON".to_owned(),
+                    )
+                })?;
+            if !Self::json_contains_string(&metadata, &comment_id.to_string()) {
+                continue;
+            }
+            let redacted = Self::redact_domain_metadata(&metadata_json)?;
+            if redacted == metadata_json {
+                continue;
+            }
+            transaction
+                .execute(
+                    "UPDATE domain_events SET metadata_json = ?1 WHERE id = ?2",
+                    rusqlite::params![redacted, event_id],
+                )
+                .map_err(crate::error::AppError::from)?;
+            changed_count = changed_count.saturating_add(1);
+        }
+        Ok(changed_count)
+    }
+
+    fn redact_domain_metadata(metadata_json: &str) -> Result<String, crate::error::AppError> {
+        let metadata: serde_json::Value = serde_json::from_str(metadata_json).map_err(|_| {
+            crate::error::AppError::Internal("domain event metadata is not valid JSON".to_owned())
+        })?;
+        let object = metadata.as_object().ok_or_else(|| {
+            crate::error::AppError::Internal(
+                "domain event metadata must be a JSON object".to_owned(),
+            )
+        })?;
+        let mut redacted = serde_json::Map::new();
+        for key in [
+            "context",
+            "comment_id",
+            "request_id",
+            "revision",
+            "number",
+            "from_state",
+            "to_state",
+            "wait_kind",
+        ] {
+            if let Some(value) = object.get(key) {
+                redacted.insert(key.to_owned(), value.clone());
+            }
+        }
+        if let Some(changes) = object.get("changes").and_then(serde_json::Value::as_object) {
+            redacted.insert(
+                "changes".to_owned(),
+                serde_json::Value::Object(
+                    changes
+                        .keys()
+                        .map(|key| {
+                            (
+                                key.clone(),
+                                serde_json::Value::String(crate::domain::REDACTED_TEXT.to_owned()),
+                            )
+                        })
+                        .collect(),
+                ),
+            );
+        }
+        if object.contains_key("body") {
+            redacted.insert(
+                "body".to_owned(),
+                serde_json::Value::String(crate::domain::REDACTED_TEXT.to_owned()),
+            );
+        }
+        redacted.insert("redacted".to_owned(), serde_json::Value::Bool(true));
+        serde_json::to_string(&serde_json::Value::Object(redacted))
+            .map_err(|error| crate::error::AppError::Internal(error.to_string()))
+    }
+
+    fn redact_idempotency_records(
+        transaction: &rusqlite::Transaction<'_>,
+        targets: &[String],
+    ) -> Result<u64, crate::error::AppError> {
+        let mut statement = transaction
+            .prepare(
+                "SELECT idempotency_key, response_json
+                 FROM idempotency_records ORDER BY created_at, idempotency_key",
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut rows = statement.query([]).map_err(crate::error::AppError::from)?;
+        let mut records = Vec::new();
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
+            records.push((
+                row.get::<_, String>(0)
+                    .map_err(crate::error::AppError::from)?,
+                row.get::<_, String>(1)
+                    .map_err(crate::error::AppError::from)?,
+            ));
+        }
+        drop(rows);
+        drop(statement);
+        let mut changed_count = 0_u64;
+        for (key, response_json) in records {
+            let response: serde_json::Value =
+                serde_json::from_str(&response_json).map_err(|_| {
+                    crate::error::AppError::Internal(
+                        "stored idempotency response is not valid JSON".to_owned(),
+                    )
+                })?;
+            if !targets
+                .iter()
+                .any(|target| Self::json_contains_string(&response, target))
+            {
+                continue;
+            }
+            let changed = transaction
+                .execute(
+                    "UPDATE idempotency_records
+                     SET request_hash = ?1, response_json = ?2
+                     WHERE idempotency_key = ?3
+                       AND (request_hash <> ?1 OR response_json <> ?2)",
+                    rusqlite::params![REDACTED_HASH, REDACTED_JSON, key],
+                )
+                .map_err(crate::error::AppError::from)?;
+            changed_count = changed_count.saturating_add(u64::try_from(changed).map_err(|_| {
+                crate::error::AppError::Internal(
+                    "redaction changed count is outside the supported range".to_owned(),
+                )
+            })?);
+        }
+        Ok(changed_count)
+    }
+
+    fn redact_audit_events_for_issue(
+        transaction: &rusqlite::Transaction<'_>,
+        issue_id: uuid::Uuid,
+    ) -> Result<u64, crate::error::AppError> {
+        let mut statement = transaction
+            .prepare(
+                "SELECT id, metadata_json, idempotency_key FROM audit_events
+                 WHERE target_type = 'issue' AND target_id = ?1",
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut rows = statement
+            .query([issue_id.to_string()])
+            .map_err(crate::error::AppError::from)?;
+        let mut events = Vec::new();
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
+            events.push((
+                row.get::<_, String>(0)
+                    .map_err(crate::error::AppError::from)?,
+                row.get::<_, String>(1)
+                    .map_err(crate::error::AppError::from)?,
+                row.get::<_, Option<String>>(2)
+                    .map_err(crate::error::AppError::from)?,
+            ));
+        }
+        drop(rows);
+        drop(statement);
+        let mut changed_count = 0_u64;
+        for (event_id, metadata_json, idempotency_key) in events {
+            let redacted = Self::redact_audit_metadata(&metadata_json);
+            if idempotency_key.is_none() && redacted == metadata_json {
+                continue;
+            }
+            transaction
+                .execute(
+                    "UPDATE audit_events
+                     SET idempotency_key = NULL, metadata_json = ?1
+                     WHERE id = ?2",
+                    rusqlite::params![redacted, event_id],
+                )
+                .map_err(crate::error::AppError::from)?;
+            changed_count = changed_count.saturating_add(1);
+        }
+        Ok(changed_count)
+    }
+
+    fn redact_audit_events_for_comment(
+        transaction: &rusqlite::Transaction<'_>,
+        issue_id: uuid::Uuid,
+        comment_id: uuid::Uuid,
+    ) -> Result<u64, crate::error::AppError> {
+        let mut statement = transaction
+            .prepare(
+                "SELECT id, target_type, target_id, metadata_json, idempotency_key
+                 FROM audit_events
+                 WHERE (target_type = 'issue' AND target_id = ?1)
+                    OR (target_type = 'comment' AND target_id = ?2)",
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut rows = statement
+            .query(rusqlite::params![
+                issue_id.to_string(),
+                comment_id.to_string()
+            ])
+            .map_err(crate::error::AppError::from)?;
+        let mut events = Vec::new();
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
+            events.push((
+                row.get::<_, String>(0)
+                    .map_err(crate::error::AppError::from)?,
+                row.get::<_, String>(1)
+                    .map_err(crate::error::AppError::from)?,
+                row.get::<_, String>(2)
+                    .map_err(crate::error::AppError::from)?,
+                row.get::<_, String>(3)
+                    .map_err(crate::error::AppError::from)?,
+                row.get::<_, Option<String>>(4)
+                    .map_err(crate::error::AppError::from)?,
+            ));
+        }
+        drop(rows);
+        drop(statement);
+        let mut changed_count = 0_u64;
+        for (event_id, target_type, target_id, metadata_json, idempotency_key) in events {
+            let metadata: serde_json::Value =
+                serde_json::from_str(&metadata_json).map_err(|_| {
+                    crate::error::AppError::Internal("audit metadata is not valid JSON".to_owned())
+                })?;
+            let is_comment_target = target_type == "comment" && target_id == comment_id.to_string();
+            let is_comment_event = Self::json_contains_string(&metadata, &comment_id.to_string());
+            if !is_comment_target && !is_comment_event {
+                continue;
+            }
+            let redacted = Self::redact_audit_metadata(&metadata_json);
+            if idempotency_key.is_none() && redacted == metadata_json {
+                continue;
+            }
+            transaction
+                .execute(
+                    "UPDATE audit_events
+                     SET idempotency_key = NULL, metadata_json = ?1
+                     WHERE id = ?2",
+                    rusqlite::params![redacted, event_id],
+                )
+                .map_err(crate::error::AppError::from)?;
+            changed_count = changed_count.saturating_add(1);
+        }
+        Ok(changed_count)
+    }
+
+    fn redact_audit_metadata(metadata_json: &str) -> String {
+        let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata_json) else {
+            return REDACTED_JSON.to_owned();
+        };
+        let Some(object) = metadata.as_object() else {
+            return REDACTED_JSON.to_owned();
+        };
+        let allowed = [
+            "archived",
+            "changed_count",
+            "comment_id",
+            "error_code",
+            "event_count",
+            "first_sequence",
+            "last_sequence",
+            "redacted",
+            "rebuilt",
+            "request_id",
+            "revision",
+            "valid",
+        ];
+        let mut redacted = serde_json::Map::new();
+        for key in allowed {
+            if let Some(value) = object.get(key) {
+                redacted.insert(key.to_owned(), value.clone());
+            }
+        }
+        if object.keys().any(|key| !allowed.contains(&key.as_str())) {
+            redacted.insert("redacted".to_owned(), serde_json::Value::Bool(true));
+        }
+        serde_json::to_string(&serde_json::Value::Object(redacted))
+            .unwrap_or_else(|_| REDACTED_JSON.to_owned())
+    }
+
+    fn json_contains_string(value: &serde_json::Value, target: &str) -> bool {
+        match value {
+            serde_json::Value::String(value) => value == target,
+            serde_json::Value::Array(values) => values
+                .iter()
+                .any(|value| Self::json_contains_string(value, target)),
+            serde_json::Value::Object(values) => values
+                .values()
+                .any(|value| Self::json_contains_string(value, target)),
+            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+                false
+            }
+        }
+    }
+
     fn insert_audit_event(
         transaction: &rusqlite::Transaction<'_>,
         event: AuditInsert<'_>,
@@ -3511,6 +4197,9 @@ impl Database {
                 | "issue_complete"
                 | "issue_cancel"
                 | "issue_reopen"
+                | "redact_issue"
+                | "redact_comment"
+                | "redact_audit"
         )
     }
 
@@ -3538,7 +4227,10 @@ impl Database {
             | "issue_resume"
             | "issue_complete"
             | "issue_cancel"
-            | "issue_reopen" => Some("issue"),
+            | "issue_reopen"
+            | "redact_issue"
+            | "redact_comment" => Some("issue"),
+            "redact_audit" => Some("audit"),
             _ => None,
         }
     }
@@ -3568,6 +4260,8 @@ impl Database {
                 | "issue_complete"
                 | "issue_cancel"
                 | "issue_reopen"
+                | "redact_issue"
+                | "redact_comment"
         )
     }
 
@@ -3604,6 +4298,7 @@ impl Database {
             "issue_block" => &["state", "reason", "wait_kind"],
             "issue_complete" => &["state", "summary", "verification"],
             "issue_cancel" | "issue_reopen" => &["state", "reason"],
+            "redact_issue" | "redact_comment" | "redact_audit" => &["redacted"],
             _ => &[],
         }
     }
