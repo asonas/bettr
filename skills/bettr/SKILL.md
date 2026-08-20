@@ -57,11 +57,13 @@ For edits and state transitions, fetch the current Issue first and pass its revi
 
 Read `.data.capabilities` from `bettr capabilities --json` before selecting a workflow. Use only capabilities whose value is `true`; ignore additive fields and stop with a clear report when the JSON contract version is unsupported. The shared matrix is [../../contracts/capabilities.json](../../contracts/capabilities.json).
 
-The implemented capability names are `issue_dependencies`, `issue_parent`, `issue_claim`, `issue_lease`, `human_decisions`, `event_cursor`, `capabilities`, and `idempotency`.
+The implemented capability names are `issue_dependencies`, `issue_parent`, `issue_claim`, `issue_lease`, `human_decisions`, `event_cursor`, `capabilities`, `idempotency`, and `audit_jsonl`.
 
 For retry-safe writes, pass the optional global `--idempotency-key <key>`. The same key is replayed only when the operation and canonical request payload match; a mismatch returns `idempotency_conflict` with exit code 4. Failed writes are not memoized, and normal `revision_conflict` and `database_busy` behavior remains unchanged.
 
 Use `bettr issue batch --input <path> --json` for an atomic JSON array of `issue_create`, `issue_edit`, `issue_comment`, `issue_start`, `issue_block`, `issue_resume`, `issue_complete`, `issue_cancel`, and `issue_reopen` operations. Use `--input -` for stdin. A batch commits all operations or rolls them all back; `--idempotency-key` replays the complete result.
+
+When `audit_jsonl` is enabled, every CLI invocation automatically projects its SQLite audit events to the database-adjacent `.audit.jsonl` file. This JSONL projection preserves the SQLite event cursor, chains each line with a SHA-256 hash, serializes concurrent appenders through SQLite, and retries unwritten events on the next invocation. It emits only safe operation/context/result fields; never add raw argv, Issue or comment bodies, or secrets to the log. Phase 3 Issue #9 does not provide `audit verify`, archive, rebuild, redaction, retention, or doctor commands; do not invent or invoke them.
 
 Stop when blocked by an unsupported contract or required human decision rather than inventing a replacement command.
 

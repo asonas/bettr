@@ -225,21 +225,29 @@ fn migrate_to_blocked_decision_context(
     Ok(())
 }
 
-fn migrate_to_jsonl_audit(
-    transaction: &rusqlite::Transaction<'_>,
-) -> Result<(), rusqlite::Error> {
-    transaction.execute("ALTER TABLE audit_events ADD COLUMN sequence INTEGER", [])?;
-    transaction.execute(
-        "UPDATE audit_events
-         SET sequence = (
-             SELECT COUNT(*)
-             FROM audit_events AS previous
-             WHERE previous.rowid <= audit_events.rowid
+fn migrate_to_jsonl_audit(transaction: &rusqlite::Transaction<'_>) -> Result<(), rusqlite::Error> {
+    let has_audit_sequence: bool = transaction.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM pragma_table_info('audit_events')
+             WHERE name = 'sequence'
          )",
         [],
+        |row| row.get(0),
     )?;
+    if !has_audit_sequence {
+        transaction.execute("ALTER TABLE audit_events ADD COLUMN sequence INTEGER", [])?;
+        transaction.execute(
+            "UPDATE audit_events
+             SET sequence = (
+                 SELECT COUNT(*)
+                 FROM audit_events AS previous
+                 WHERE previous.rowid <= audit_events.rowid
+             )",
+            [],
+        )?;
+    }
     transaction.execute(
-        "CREATE UNIQUE INDEX audit_events_sequence ON audit_events(sequence)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS audit_events_sequence ON audit_events(sequence)",
         [],
     )?;
     transaction.execute_batch(
@@ -493,7 +501,6 @@ mod tests {
                      resolved_at TEXT
                  );
                  CREATE TABLE audit_events (id TEXT PRIMARY KEY);",
-                 );",
             )
             .unwrap();
 
@@ -664,10 +671,15 @@ mod tests {
             .prepare("SELECT id, sequence FROM audit_events ORDER BY sequence")
             .unwrap();
         let rows = statement
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        assert_eq!(rows, vec![("first".to_owned(), 1), ("second".to_owned(), 2)]);
+        assert_eq!(
+            rows,
+            vec![("first".to_owned(), 1), ("second".to_owned(), 2)]
+        );
     }
 }

@@ -18,9 +18,9 @@ Phase 2では、原子的なclaim、セッション単位のlease、heartbeat、
 
 ## Phase 3: Audit and Operations
 
-Phase 3では、SQLiteを正本とする追記専用JSON Lines監査ログ、ハッシュチェーン、未反映イベントの復旧、archive、verify、再構築を実装します。SQLite online backupによるバックアップと復元、監査履歴を考慮した機密情報消去、`bettr doctor`による整合性・権限・lease・監査検査も追加します。
+Phase 3では、SQLiteを正本とする追記専用JSON Lines監査ログ、ハッシュチェーン、未反映イベントの復旧を段階的に実装します。Issue #9は通常のCLI実行に伴う安全な自動投影、SQLite cursorによる追記直列化、クラッシュ復旧、ローテーション境界までを対象とします。archive、verify、再構築はIssue #10、監査履歴を考慮した機密情報消去と保持期間はIssue #12、SQLite online backupと`bettr doctor`は別の後続Issueで扱います。
 
-完了条件は、プロセス停止を挟んでも監査JSONLをSQLiteから復旧でき、改変と欠落を検知でき、稼働中のDBを安全にバックアップでき、秘密内容を消去しても消去操作そのものは追跡できることです。Phase 2までのデータ量と障害事例を確認してから、独立した詳細計画を作成します。
+Issue #9の完了条件は、プロセス停止を挟んでも監査JSONLをSQLiteから復旧でき、複数プロセスで重複なく追記でき、生の入力や秘密値を出力しないことです。改変・欠落の検知、バックアップ、履歴消去、保持期間は各後続Issueの完了条件とします。
 
 ## Local Web UI
 

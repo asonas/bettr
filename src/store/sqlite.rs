@@ -2827,6 +2827,100 @@ impl Database {
         Ok(events)
     }
 
+    pub(crate) fn flush_audit_jsonl(
+        &mut self,
+        path: &std::path::Path,
+    ) -> Result<(), crate::error::AppError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::AppError::from)?;
+        let (cursor_sequence, cursor_hash): (i64, Option<String>) = transaction
+            .query_row(
+                "SELECT sequence, previous_hash FROM audit_jsonl_cursor WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut statement = transaction
+            .prepare(
+                "SELECT sequence, id, started_at, finished_at, operation, success, exit_code,
+                        initiator_kind, initiator_name, session_id, project_id,
+                        target_type, target_id, revision, changed_fields_json, metadata_json
+                 FROM audit_events
+                 WHERE sequence > ?1
+                 ORDER BY sequence",
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut rows = statement
+            .query([cursor_sequence])
+            .map_err(crate::error::AppError::from)?;
+        let mut source_events = Vec::new();
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
+            source_events.push(crate::store::jsonl::SourceAuditEvent::from_row(row)?);
+        }
+        drop(rows);
+        drop(statement);
+
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(path)
+            .map_err(|_| crate::error::AppError::Internal("audit JSONL open failed".to_owned()))?;
+        let existing = crate::store::jsonl::read_existing(&mut file)?;
+        let source_sequences = source_events
+            .iter()
+            .map(|event| event.sequence)
+            .collect::<std::collections::BTreeSet<_>>();
+        if existing
+            .keys()
+            .any(|sequence| *sequence > cursor_sequence && !source_sequences.contains(sequence))
+        {
+            return Err(crate::error::AppError::Internal(
+                "audit JSONL contains an unrecognized pending sequence".to_owned(),
+            ));
+        }
+
+        let mut sequence = cursor_sequence;
+        let mut previous_hash = cursor_hash.clone();
+        for source_event in source_events {
+            let event = source_event.to_jsonl(previous_hash.as_deref())?;
+            if let Some(existing_event) = existing.get(&event.sequence) {
+                if !event.matches(existing_event) {
+                    return Err(crate::error::AppError::Internal(
+                        "audit JSONL sequence conflicts with SQLite".to_owned(),
+                    ));
+                }
+            } else {
+                if existing
+                    .keys()
+                    .any(|existing_sequence| *existing_sequence > event.sequence)
+                {
+                    return Err(crate::error::AppError::Internal(
+                        "audit JSONL sequence is out of order".to_owned(),
+                    ));
+                }
+                crate::store::jsonl::append(&mut file, &event)?;
+            }
+            sequence = event.sequence;
+            previous_hash = Some(event.hash);
+        }
+
+        if sequence != cursor_sequence || previous_hash != cursor_hash {
+            transaction
+                .execute(
+                    "UPDATE audit_jsonl_cursor
+                     SET sequence = ?1, previous_hash = ?2, updated_at = ?3
+                     WHERE id = 1",
+                    rusqlite::params![sequence, previous_hash, chrono::Utc::now().to_rfc3339()],
+                )
+                .map_err(crate::error::AppError::from)?;
+        }
+        transaction.commit().map_err(crate::error::AppError::from)
+    }
+
     pub fn record_successful_operation(
         &mut self,
         operation: &str,
@@ -3054,12 +3148,13 @@ impl Database {
         transaction
             .execute(
                 "INSERT INTO audit_events (
-                    id, occurred_at, started_at, finished_at, operation, success, exit_code,
+                    id, sequence, occurred_at, started_at, finished_at, operation, success, exit_code,
                     initiator_kind, initiator_name, session_id, project_id, project_name,
                     target_type, target_id, revision, idempotency_key, changed_fields_json,
                     metadata_json
                  ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
+                    ?1, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM audit_events),
+                    ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
                  )",
                 rusqlite::params![
                     uuid::Uuid::new_v4().to_string(),
@@ -4042,6 +4137,7 @@ impl Database {
             (4, "idempotency_and_audit"),
             (5, "blocked_decision_context"),
             (6, "repair_blocked_decision_context"),
+            (7, "jsonl_audit_cursor"),
         ] {
             transaction
                 .execute(

@@ -23,6 +23,8 @@ fn codex_and_claude_skills_use_only_declared_phase_two_contracts() {
     }
     assert!(combined.contains("idempotency-key"));
     assert!(combined.contains("bettr issue batch"));
+    assert!(combined.contains("audit_jsonl"));
+    assert!(combined.contains("JSONL"));
     for command in [
         "bettr capabilities --json",
         "bettr issue claim",

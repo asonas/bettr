@@ -1666,6 +1666,7 @@ impl App {
                 ("event_cursor", true),
                 ("capabilities", true),
                 ("idempotency", true),
+                ("audit_jsonl", true),
             ]
             .into_iter()
             .collect(),

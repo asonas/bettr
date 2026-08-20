@@ -1,3 +1,4 @@
+pub(crate) mod jsonl;
 mod migrations;
 mod sqlite;
 

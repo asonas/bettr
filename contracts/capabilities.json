@@ -9,6 +9,7 @@
     "human_decisions": true,
     "event_cursor": true,
     "capabilities": true,
-    "idempotency": true
+    "idempotency": true,
+    "audit_jsonl": true
   }
 }

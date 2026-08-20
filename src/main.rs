@@ -31,19 +31,60 @@ fn main() -> std::process::ExitCode {
                 crate::error::AppError::InvalidInput(error.to_string()),
                 started_at,
             );
+            crate::flush_audit_jsonl_for_arguments(&arguments, output_mode);
             crate::output::write_error(output_mode, &error);
             return std::process::ExitCode::from(error.exit_code() as u8);
         }
     };
     let output_mode = crate::output::OutputMode::from(&cli);
+    let database_path =
+        crate::app::App::resolved_context(cli.project.clone(), cli.database.clone())
+            .ok()
+            .map(|context| context.database.value);
+    let result = crate::run(cli, output_mode);
+    if let Some(database_path) = database_path {
+        crate::flush_audit_jsonl(&database_path, output_mode);
+    }
 
-    match crate::run(cli, output_mode) {
+    match result {
         Ok(()) => std::process::ExitCode::from(crate::error::ExitCode::Success as u8),
         Err(error) => {
             crate::output::write_error(output_mode, &error);
             std::process::ExitCode::from(error.exit_code() as u8)
         }
     }
+}
+
+fn flush_audit_jsonl(database_path: &std::path::Path, output_mode: crate::output::OutputMode) {
+    if !database_path.is_file() {
+        return;
+    }
+    let result = (|| {
+        let mut database = match crate::store::Database::open(database_path) {
+            Ok(database) => database,
+            Err(crate::error::AppError::DatabaseNotInitialized) => return Ok(()),
+            Err(crate::error::AppError::UnsupportedDatabaseSchemaVersion { .. }) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        database.flush_audit_jsonl(&crate::store::jsonl::path_for_database(database_path))
+    })();
+    if result.is_err() && output_mode == crate::output::OutputMode::Human {
+        eprintln!("warning: audit JSONL flush failed");
+    }
+}
+
+fn flush_audit_jsonl_for_arguments(
+    arguments: &[std::ffi::OsString],
+    output_mode: crate::output::OutputMode,
+) {
+    let Some(invocation) = crate::cli::AuditInvocation::from_arguments(arguments) else {
+        return;
+    };
+    let Ok(resolved) = crate::app::App::resolved_context(invocation.project, invocation.database)
+    else {
+        return;
+    };
+    crate::flush_audit_jsonl(&resolved.database.value, output_mode);
 }
 
 fn run(

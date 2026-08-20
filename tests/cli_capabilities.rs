@@ -25,6 +25,7 @@ fn capabilities_report_the_phase_two_contract_and_match_fixture() {
     assert_eq!(capabilities["capabilities"]["event_cursor"], true);
     assert_eq!(capabilities["capabilities"]["capabilities"], true);
     assert_eq!(capabilities["capabilities"]["idempotency"], true);
+    assert_eq!(capabilities["capabilities"]["audit_jsonl"], true);
 
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("../contracts/capabilities.json")).unwrap();
