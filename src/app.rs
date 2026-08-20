@@ -1105,8 +1105,7 @@ impl App {
         &mut self,
         project: &str,
         number: i64,
-        question: &str,
-        background: &str,
+        input: &crate::domain::DecisionRequestInput,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::DecisionRequest, crate::error::AppError> {
         let started_at = chrono::Utc::now();
@@ -1116,8 +1115,12 @@ impl App {
             serde_json::json!({
                 "project": project,
                 "number": number,
-                "question": question,
-                "background": background,
+                "blocker": input.blocker,
+                "question": input.question,
+                "options": input.options,
+                "recommendation": input.recommendation,
+                "resume_condition": input.resume_condition,
+                "background": input.background,
             }),
             context,
         )?;
@@ -1127,10 +1130,20 @@ impl App {
                     "issue number must be positive".to_owned(),
                 ));
             }
-            crate::domain::validate_decision_text("decision question", question)?;
-            crate::domain::validate_decision_text("decision background", background)?;
+            crate::domain::validate_decision_text("decision question", &input.question)?;
+            crate::domain::validate_decision_text("decision blocker", &input.blocker)?;
+            crate::domain::validate_decision_options(&input.options)?;
+            crate::domain::validate_decision_text(
+                "decision recommendation",
+                &input.recommendation,
+            )?;
+            crate::domain::validate_decision_text(
+                "decision resume condition",
+                &input.resume_condition,
+            )?;
+            crate::domain::validate_decision_text("decision background", &input.background)?;
             self.database.with_idempotency(idempotency, |database| {
-                database.request_decision(project, number, question, background, context)
+                database.request_decision(project, number, input, context)
             })
         })();
         match result {

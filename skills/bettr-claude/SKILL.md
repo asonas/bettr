@@ -48,11 +48,26 @@ Use `issue_dependencies` and `issue_parent` for structured coordination rather t
 
 ## Human decisions
 
-Create a request with a precise question and enough background, then stop work on that Issue until it is resolved:
+Create exactly one request for the human choice and stop work on that Issue until it is resolved. Make the Issue-facing context explicit in this order:
+
+```text
+Blocker: what cannot proceed
+Human decision: the single question the human must answer
+Options: every viable choice and its consequence
+Recommendation: the agent's recommended choice and why
+Resume condition: what becomes true after the answer
+```
+
+Store each field in the request so the Issue detail exposes the blocker and the required human action:
 
 ```sh
 bettr decision request 12 --project bettr \
+  --blocker "The migration cannot proceed until the storage format is selected." \
   --question "Which behavior is intended?" \
+  --option "Use the existing format: no migration, but the new field is unavailable." \
+  --option "Add a migration: the new field is available, but old data is rewritten." \
+  --recommendation "Add a migration because the feature requires the new field." \
+  --resume-condition "The selected format is recorded and the migration contract is fixed." \
   --background "The choice changes the rollout." --json
 ```
 

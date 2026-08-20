@@ -117,11 +117,26 @@ bettr issue dependency add bettr#3 bettr#12 --json
 bettr issue parent set bettr#12 bettr#3 --json
 ```
 
-When work requires a human choice, create a request and stop agent work on that Issue:
+When work requires a human choice, create exactly one request for that choice and stop agent work on that Issue. Before invoking the command, write the Issue-facing context in this order:
+
+```text
+Blocker: what cannot proceed
+Human decision: the single question the human must answer
+Options: every viable choice and its consequence
+Recommendation: the agent's recommended choice and why
+Resume condition: what becomes true after the answer
+```
+
+Store each field in the decision request so the Issue detail can show the blocker and the human action without requiring the reader to reconstruct the agent's reasoning:
 
 ```sh
 bettr decision request 12 --project bettr \
+  --blocker "The migration cannot proceed until the storage format is selected." \
   --question "Which behavior is intended?" \
+  --option "Use the existing format: no migration, but the new field is unavailable." \
+  --option "Add a migration: the new field is available, but old data is rewritten." \
+  --recommendation "Add a migration because the feature requires the new field." \
+  --resume-condition "The selected format is recorded and the migration contract is fixed." \
   --background "Both options affect the migration." --json
 ```
 

@@ -193,7 +193,7 @@ Expected: exactly one concurrent claimant succeeds; stale leases remain `in_prog
 - Modify: `tests/cli_status.rs`
 
 **Interfaces:**
-- Adds `decision request NUMBER --question QUESTION --background BACKGROUND`.
+- Adds `decision request NUMBER --blocker BLOCKER --question QUESTION --option OPTION... --recommendation RECOMMENDATION --resume-condition RESUME_CONDITION --background BACKGROUND`.
 - Adds `decision resolve REQUEST_ID --answer ANSWER --next-state STATE`, with state-specific transition metadata: `--reason` and `--wait-kind` for `blocked`, `--summary` and `--verification` for `done`, and `--reason` for `cancelled`.
 - Adds serialized request objects and `attention_required` data to status/Issue responses.
 

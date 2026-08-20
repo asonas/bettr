@@ -416,13 +416,16 @@ fn run(
                     let project =
                         crate::require_project(&mut app, project.as_deref(), "decision_request")?;
                     let context = crate::domain::ExecutionContext::resolve()?;
-                    let request = app.request_decision(
-                        project,
-                        command.number,
-                        &command.question,
-                        &command.background,
-                        &context,
-                    )?;
+                    let input = crate::domain::DecisionRequestInput {
+                        blocker: command.blocker,
+                        question: command.question,
+                        options: command.options,
+                        recommendation: command.recommendation,
+                        resume_condition: command.resume_condition,
+                        background: command.background,
+                    };
+                    let request =
+                        app.request_decision(project, command.number, &input, &context)?;
                     match output_mode {
                         crate::output::OutputMode::Human => {
                             crate::output::write_decision_human(&request)

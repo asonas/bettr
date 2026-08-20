@@ -93,8 +93,18 @@ fn request_decision(app: &support::TestApp, question: &str, session: &str) -> se
             "1",
             "--project",
             "bettr",
+            "--blocker",
+            "The implementation has two compatible choices.",
             "--question",
             question,
+            "--option",
+            "Use option A.",
+            "--option",
+            "Use option B.",
+            "--recommendation",
+            "Use option A.",
+            "--resume-condition",
+            "The selected option is implemented and verified.",
             "--background",
             "The implementation has two compatible choices.",
             "--json",
@@ -304,6 +314,22 @@ fn web_exposes_waiting_context_and_multiple_decisions() {
     let response: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(response["data"]["decisions"].as_array().unwrap().len(), 2);
     assert_eq!(response["data"]["decisions"][0]["id"], first["id"]);
+    assert_eq!(
+        response["data"]["decisions"][0]["blocker"],
+        "The implementation has two compatible choices."
+    );
+    assert_eq!(
+        response["data"]["decisions"][0]["options"][0],
+        "Use option A."
+    );
+    assert_eq!(
+        response["data"]["decisions"][0]["recommendation"],
+        "Use option A."
+    );
+    assert_eq!(
+        response["data"]["decisions"][0]["resume_condition"],
+        "The selected option is implemented and verified."
+    );
     assert_eq!(response["data"]["wait"]["label"], "Human decision");
     assert!(
         response["data"]["wait"]["reason"]
