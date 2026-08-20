@@ -51,7 +51,7 @@ html { min-width: 320px; background: var(--canvas); }
 
 body { margin: 0; min-width: 320px; color: var(--ink); background: var(--canvas); }
 
-button, input { font: inherit; }
+button, input, textarea, select { font: inherit; }
 
 button, a { -webkit-tap-highlight-color: transparent; }
 
@@ -131,6 +131,7 @@ h1 { margin: 0; font-size: clamp(26px, 3vw, 36px); font-weight: 720; letter-spac
 .kanban-card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; color: var(--ink-muted); font-size: 10px; }
 .kanban-card-title { display: -webkit-box; overflow: hidden; font-size: 13px; font-weight: 620; line-height: 1.35; text-overflow: ellipsis; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .kanban-card-meta { display: flex; min-width: 0; gap: 8px; overflow: hidden; color: var(--ink-muted); font-size: 10px; white-space: nowrap; }
+.kanban-card-wait { overflow: hidden; color: var(--signal); text-overflow: ellipsis; }
 .kanban-card-time { color: var(--ink-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .copy-key-button { min-width: 40px; min-height: 30px; padding: 5px 7px; color: var(--ink-muted); background: var(--surface-muted); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; font-size: 10px; line-height: 1; transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease, transform 140ms ease; }
 .copy-key-button:hover { color: var(--ink); background: var(--surface); border-color: var(--line-strong); }
@@ -152,6 +153,7 @@ h1 { margin: 0; font-size: clamp(26px, 3vw, 36px); font-weight: 720; letter-spac
 .issue-title { overflow: hidden; font-size: 13px; font-weight: 580; text-overflow: ellipsis; white-space: nowrap; }
 .issue-meta { display: flex; gap: 9px; margin-top: 4px; overflow: hidden; color: var(--ink-muted); font-size: 10px; white-space: nowrap; }
 .issue-key { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.issue-wait { overflow: hidden; color: var(--signal); text-overflow: ellipsis; }
 .issue-updated { color: var(--ink-faint); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .priority { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-muted); }
 .priority::before { width: 5px; height: 5px; border-radius: 50%; background: var(--ink-faint); content: ""; }
@@ -169,6 +171,36 @@ h1 { margin: 0; font-size: clamp(26px, 3vw, 36px); font-weight: 720; letter-spac
 .detail-key { margin: 0; color: var(--ink-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
 .detail-body { margin: 29px 0 37px; color: var(--ink); font-size: 14px; line-height: 1.75; white-space: pre-wrap; }
 .detail-body:empty::before { color: var(--ink-faint); content: "No body"; }
+.decision-section { display: grid; gap: 12px; margin: 38px 0 42px; }
+.decision-section > h2, .wait-context h2 { margin: 0; color: var(--ink-muted); font-size: 11px; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
+.wait-context { display: grid; gap: 5px; padding: 16px 18px; color: var(--ink-muted); background: var(--updated-surface); border: 1px solid color-mix(in srgb, var(--signal) 35%, var(--line)); border-inline-start: 3px solid var(--signal); border-radius: 8px; }
+.wait-context h2 { color: var(--ink); }
+.wait-context p { margin: 0; font-size: 12px; line-height: 1.5; }
+.wait-context .wait-kind { color: var(--signal); font-weight: 700; }
+.decision-intro { margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.55; }
+.decision-forms { display: grid; gap: 12px; }
+.decision-form { padding: 15px; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; }
+.decision-form fieldset { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.decision-form legend { max-width: 100%; padding: 0; color: var(--ink); font-size: 13px; font-weight: 650; line-height: 1.4; }
+.decision-background { margin: 0 0 3px; color: var(--ink-muted); font-size: 11px; line-height: 1.5; }
+.required-note { margin: 0; color: var(--ink-faint); font-size: 10px; }
+.required-note span { color: var(--danger); }
+.decision-form label { color: var(--ink-muted); font-size: 11px; font-weight: 650; }
+.decision-form textarea, .decision-form select { width: 100%; padding: 8px 9px; color: var(--ink); background: var(--surface-raised); border: 1px solid var(--line-strong); border-radius: 6px; font-size: 12px; line-height: 1.45; }
+.decision-form textarea { resize: vertical; }
+.decision-form select { min-height: 34px; }
+.decision-form textarea:disabled, .decision-form select:disabled { color: var(--ink-faint); background: var(--surface-muted); }
+.decision-state-fields { display: grid; gap: 8px; margin-top: 2px; padding-top: 10px; border-top: 1px solid var(--line); }
+.decision-submit { width: fit-content; min-height: 34px; margin-top: 4px; padding: 7px 12px; color: var(--surface); background: var(--accent-strong); border: 1px solid var(--accent-strong); border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 650; }
+.decision-submit:hover { filter: brightness(.94); }
+.decision-submit:disabled { cursor: wait; opacity: .58; }
+.decision-form-feedback { min-height: 16px; margin: 0; color: var(--danger); font-size: 11px; line-height: 1.45; }
+.decision-history { display: grid; gap: 8px; }
+.decision-record { padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.decision-record p { margin: 6px 0 0; color: var(--ink-muted); font-size: 11px; line-height: 1.45; }
+.decision-record-header { display: flex; justify-content: space-between; gap: 12px; color: var(--success); font-size: 11px; }
+.decision-record-header span { color: var(--ink-faint); font-weight: 400; }
+.decision-answer { white-space: pre-wrap; }
 .activity-heading { display: flex; align-items: center; gap: 9px; margin: 0 0 12px; color: var(--ink-muted); font-size: 11px; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
 .activity-heading::after { height: 1px; flex: 1; background: var(--line); content: ""; }
 .activity-list { display: grid; gap: 10px; }

@@ -8,6 +8,19 @@ const statusLabels = {
   cancelled: "Cancelled",
 };
 
+const decisionStateLabels = {
+  todo: "Return to Todo",
+  blocked: "Keep Blocked",
+  done: "Mark Done",
+  cancelled: "Cancel",
+};
+
+const waitKindLabels = {
+  human: "Human decision",
+  dependency: "Blocking dependency",
+  external: "External system",
+};
+
 export function createWebController({
   document: documentRef = globalThis.document,
   window: windowRef = globalThis.window,
@@ -51,13 +64,18 @@ export function createWebController({
     return `<button class="copy-key-button" type="button" data-copy-key="${escapedKey}" aria-label="Copy ${escapedKey}">Copy</button>`;
   }
 
+  function waitSummary(item) {
+    if (!item.wait) return "";
+    return `<span class="issue-wait" title="${escapeHtml(item.wait.reason)}">${escapeHtml(item.wait.label)}: ${escapeHtml(item.wait.reason)}</span>`;
+  }
+
   function issueRow(item) {
     const issue = item.issue || item;
     const project = item.project || issue.project || "";
     const priority = issue.priority ? `<span class="priority ${escapeHtml(issue.priority)}">${escapeHtml(issue.priority)}</span>` : "";
     return `<button class="issue-row" type="button" data-project="${escapeHtml(project)}" data-number="${issue.number}">
       <span class="issue-state-dot ${escapeHtml(issue.state)}" aria-hidden="true"></span>
-      <span class="issue-main"><span class="issue-title">${escapeHtml(issue.title)}</span><span class="issue-meta"><span class="issue-key">${escapeHtml(project)}#${issue.number}</span>${priority}<span>${escapeHtml(statusLabels[issue.state] || issue.state)}</span></span></span>
+      <span class="issue-main"><span class="issue-title">${escapeHtml(issue.title)}</span><span class="issue-meta"><span class="issue-key">${escapeHtml(project)}#${issue.number}</span>${priority}<span>${escapeHtml(statusLabels[issue.state] || issue.state)}</span>${waitSummary(item)}</span></span>
       <span class="issue-updated">${formatDate(issue.updated_at)}</span>
     </button>`;
   }
@@ -74,10 +92,11 @@ export function createWebController({
     const priority = issue.priority ? `<span class="priority ${escapeHtml(issue.priority)}">${escapeHtml(issue.priority)}</span>` : "";
     const assignee = issue.assignee_name ? `<span>${escapeHtml(issue.assignee_name)}</span>` : "";
     const updated = state.updatedIssues.has(key);
+    const wait = item.wait ? `<span class="kanban-card-wait">${escapeHtml(item.wait.label)}: ${escapeHtml(item.wait.reason)}</span>` : "";
     return `<div class="kanban-card-shell"><button class="kanban-card${updated ? " is-updated" : ""}" type="button" data-project="${escapeHtml(project)}" data-number="${issue.number}"${updated ? ` data-updated="true"` : ""}>
       <span class="kanban-card-header"><span class="issue-key">${escapeHtml(key)}</span>${updated ? `<span class="sr-only">Updated</span>` : ""}</span>
       <span class="kanban-card-title">${escapeHtml(issue.title)}</span>
-      <span class="kanban-card-meta">${priority}${assignee}</span>
+      <span class="kanban-card-meta">${priority}${assignee}${wait}</span>
       <time class="kanban-card-time" datetime="${escapeHtml(issue.updated_at)}">${formatDate(issue.updated_at)}</time>
     </button>${copyIssueButton(key)}</div>`;
   }
@@ -115,11 +134,14 @@ export function createWebController({
     state.updatedIssues.delete(issueKey({ project, number }));
     renderUpdatedMenu();
     breadcrumbs.innerHTML = `<a href="#/projects">Projects</a><span> / ${escapeHtml(project)}#${number}</span>`;
+    app.setAttribute("aria-busy", "true");
     app.innerHTML = `<div class="loading-state"><span class="loader" aria-hidden="true"></span><span>Loading Issue</span></div>`;
     const response = await api(`/api/issues/${encodeURIComponent(number)}?project=${encodeURIComponent(project)}`);
     const issue = response.data.issue;
     const key = issueKey({ project, number });
     const history = response.data.history || [];
+    const decisions = response.data.decisions || [];
+    const wait = response.data.wait || null;
     const activity = history.map((event) => {
       const body = activityBody(event);
       const label = event.event_type === "comment_added" ? "Comment" : (event.event_type || "Activity").replaceAll("_", " ");
@@ -127,8 +149,134 @@ export function createWebController({
       const session = event.context?.session_id ? ` · ${event.context.session_id}` : "";
       return `<article class="activity-item"><div class="activity-meta"><span class="activity-type">${escapeHtml(label)} · ${escapeHtml(actor)}${escapeHtml(session)}</span><time datetime="${escapeHtml(event.created_at)}">${formatDate(event.created_at)}</time></div><p class="activity-body">${escapeHtml(body || "Change recorded")}</p></article>`;
     }).join("");
-    app.innerHTML = `<div class="detail-layout"><article><p class="eyebrow">${escapeHtml(project)} / Issue ${number}</p><div class="detail-key-row"><p class="detail-key">${escapeHtml(key)} · revision ${issue.revision}</p>${copyIssueButton(key)}</div><h1 class="detail-title">${escapeHtml(issue.title)}</h1><div class="detail-body">${escapeHtml(issue.body || "")}</div><h2 class="activity-heading">Activity</h2><div class="activity-list">${activity || `<div class="empty-state"><strong>No activity yet</strong><span>Comments and state changes from the CLI will appear here.</span></div>`}</div></article><aside class="property-rail" aria-label="Issue properties"><dl class="property-list"><div><dt>State</dt><dd><span class="state-pill ${escapeHtml(issue.state)}">${escapeHtml(statusLabels[issue.state] || issue.state)}</span></dd></div><div><dt>Priority</dt><dd>${escapeHtml(issue.priority || "Not set")}</dd></div><div><dt>Assignee</dt><dd>${escapeHtml(issue.assignee_name || "Unassigned")}</dd></div><div><dt>Created</dt><dd>${formatDate(issue.created_at)}</dd></div><div><dt>Updated</dt><dd>${formatDate(issue.updated_at)}</dd></div><div><dt>Context</dt><dd>revision ${issue.revision}</dd></div></dl></aside></div>`;
+    app.innerHTML = `<div class="detail-layout"><article><p class="eyebrow">${escapeHtml(project)} / Issue ${number}</p><div class="detail-key-row"><p class="detail-key">${escapeHtml(key)} · revision ${issue.revision}</p>${copyIssueButton(key)}</div><h1 class="detail-title" tabindex="-1">${escapeHtml(issue.title)}</h1><div class="detail-body">${escapeHtml(issue.body || "")}</div>${renderDecisionSection(decisions, issue.revision, wait)}<h2 class="activity-heading">Activity</h2><div class="activity-list">${activity || `<div class="empty-state"><strong>No activity yet</strong><span>Comments and state changes from the CLI will appear here.</span></div>`}</div></article><aside class="property-rail" aria-label="Issue properties"><dl class="property-list"><div><dt>State</dt><dd><span class="state-pill ${escapeHtml(issue.state)}">${escapeHtml(statusLabels[issue.state] || issue.state)}</span></dd></div><div><dt>Priority</dt><dd>${escapeHtml(issue.priority || "Not set")}</dd></div><div><dt>Assignee</dt><dd>${escapeHtml(issue.assignee_name || "Unassigned")}</dd></div><div><dt>Created</dt><dd>${formatDate(issue.created_at)}</dd></div><div><dt>Updated</dt><dd>${formatDate(issue.updated_at)}</dd></div><div><dt>Wait</dt><dd>${wait ? `${escapeHtml(wait.label)}: ${escapeHtml(wait.reason)}` : "No active wait"}</dd></div><div><dt>Context</dt><dd>revision ${issue.revision}</dd></div></dl></aside></div>`;
     bindCopyButtons();
+    bindDecisionForms(project, number);
+    app.removeAttribute("aria-busy");
+  }
+
+  function renderDecisionSection(decisions, revision, wait) {
+    const unresolved = decisions.filter((decision) => decision.status === "open");
+    const resolved = decisions.filter((decision) => decision.status !== "open");
+    const waitMarkup = wait ? `<section class="wait-context" aria-live="polite"><h2>${escapeHtml(wait.kind === "human" ? "Waiting for a decision" : "Waiting context")}</h2><p class="wait-kind">${escapeHtml(wait.label)}</p><p>${escapeHtml(wait.reason)}</p></section>` : "";
+    const resolvedMarkup = resolved.length
+      ? `<div class="decision-history" aria-label="Resolved decisions">${resolved.map((decision) => `<article class="decision-record"><div class="decision-record-header"><strong>Decision resolved</strong><span>${escapeHtml(formatDate(decision.resolved_at || decision.created_at))}</span></div><p>${escapeHtml(decision.question)}</p>${decision.answer ? `<p class="decision-answer">Answer: ${escapeHtml(decision.answer)}</p>` : ""}</article>`).join("")}</div>`
+      : "";
+    const content = unresolved.length
+      ? `<p class="decision-intro">A human answer is needed before this Issue can continue. Each request is resolved separately.</p><div class="decision-forms">${unresolved.map((decision) => decisionForm(decision, revision)).join("")}</div>`
+      : `<div class="empty-state"><strong>No unresolved decisions</strong><span>No human decision is waiting for an answer.</span></div>${resolvedMarkup}`;
+    return `<section class="decision-section" aria-labelledby="decision-heading">${waitMarkup}<h2 id="decision-heading">Decision</h2>${content}</section>`;
+  }
+
+  function decisionForm(decision, revision) {
+    const id = escapeHtml(decision.id);
+    const fieldId = (name) => `decision-${id}-${name}`;
+    const options = Object.entries(decisionStateLabels).map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
+    return `<form class="decision-form" data-decision-form="${id}" data-revision="${revision}" aria-labelledby="${fieldId("question")}" aria-describedby="${fieldId("feedback")}">
+      <fieldset>
+        <legend id="${fieldId("question")}">${escapeHtml(decision.question)}</legend>
+        <p class="decision-background">${escapeHtml(decision.background || "No additional background was provided.")}</p>
+        <p class="required-note"><span aria-hidden="true">*</span> Required</p>
+        <label for="${fieldId("answer")}">Answer <span aria-hidden="true">*</span></label>
+        <textarea id="${fieldId("answer")}" name="answer" rows="3" required></textarea>
+        <label for="${fieldId("state")}">Next state</label>
+        <select id="${fieldId("state")}" name="next_state">
+          ${options}
+        </select>
+        <div class="decision-state-fields" data-resolution-state="blocked" hidden>
+          <label for="${fieldId("reason")}">Blocked reason <span aria-hidden="true">*</span></label>
+          <textarea id="${fieldId("reason")}" name="reason" rows="2" disabled></textarea>
+          <label for="${fieldId("wait-kind")}">Wait kind <span aria-hidden="true">*</span></label>
+          <select id="${fieldId("wait-kind")}" name="wait_kind" disabled>
+            <option value="">Choose a wait kind</option>
+            ${Object.entries(waitKindLabels).map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}
+          </select>
+        </div>
+        <div class="decision-state-fields" data-resolution-state="done" hidden>
+          <label for="${fieldId("summary")}">Summary <span aria-hidden="true">*</span></label>
+          <textarea id="${fieldId("summary")}" name="summary" rows="2" disabled></textarea>
+          <label for="${fieldId("verification")}">Verification <span aria-hidden="true">*</span></label>
+          <textarea id="${fieldId("verification")}" name="verification" rows="2" disabled></textarea>
+        </div>
+        <div class="decision-state-fields" data-resolution-state="cancelled" hidden>
+          <label for="${fieldId("cancel-reason")}">Cancellation reason <span aria-hidden="true">*</span></label>
+          <textarea id="${fieldId("cancel-reason")}" name="reason" rows="2" disabled></textarea>
+        </div>
+        <button class="decision-submit" type="submit">Resolve decision</button>
+        <p id="${fieldId("feedback")}" class="decision-form-feedback" data-decision-feedback role="status" aria-live="polite"></p>
+      </fieldset>
+    </form>`;
+  }
+
+  function updateDecisionFields(form) {
+    const nextState = form.querySelector('[name="next_state"]').value;
+    form.querySelectorAll("[data-resolution-state]").forEach((section) => {
+      const active = section.dataset.resolutionState === nextState;
+      section.hidden = !active;
+      section.querySelectorAll("input, textarea, select").forEach((field) => {
+        field.disabled = !active;
+        field.required = active;
+      });
+    });
+  }
+
+  function bindDecisionForms(project, number) {
+    document.querySelectorAll("[data-decision-form]").forEach((form) => {
+      updateDecisionFields(form);
+      form.querySelector('[name="next_state"]').addEventListener("change", () => updateDecisionFields(form));
+      form.querySelectorAll("input, textarea, select").forEach((field) => field.addEventListener("input", () => field.removeAttribute("aria-invalid")));
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        submitDecision(form, project, number);
+      });
+    });
+  }
+
+  async function submitDecision(form, project, number) {
+    if (form.dataset.submitting === "true") return;
+    form.dataset.submitting = "true";
+    form.setAttribute("aria-busy", "true");
+    form.querySelectorAll("input, textarea, select, button").forEach((field) => { field.disabled = true; });
+    const feedback = form.querySelector("[data-decision-feedback]");
+    const formData = new FormData(form);
+    const payload = {
+      expected_revision: Number(form.dataset.revision),
+      answer: String(formData.get("answer") || ""),
+      next_state: String(formData.get("next_state") || "todo"),
+    };
+    ["summary", "verification", "reason", "wait_kind"].forEach((name) => {
+      const value = formData.get(name);
+      if (value !== null && value !== "") payload[name] = String(value);
+    });
+    try {
+      await api(`/api/decisions/${encodeURIComponent(form.dataset.decisionForm)}/resolve`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      announceCopy("Decision resolved");
+      await renderDetail(project, number);
+    } catch (error) {
+      feedback.textContent = error.status === 409
+        ? `${error.message} Reload the Issue to review its current revision.`
+        : error.status === 503
+          ? `${error.message} Reload the Issue before trying again.`
+          : error.status
+            ? error.message
+            : "The result could not be confirmed. Reload the Issue before trying again.";
+      if (error.status && error.status < 500) {
+        form.dataset.submitting = "false";
+        form.removeAttribute("aria-busy");
+        updateDecisionFields(form);
+        form.querySelector(".decision-submit").disabled = false;
+        if (error.status === 400) {
+          const invalidField = [...form.querySelectorAll("input, textarea, select")]
+            .find((field) => field.required && !field.value);
+          invalidField?.setAttribute("aria-invalid", "true");
+          invalidField?.setAttribute("aria-describedby", feedback.id);
+          invalidField?.focus();
+        }
+      }
+    }
   }
 
   async function renderRecent() {
@@ -309,10 +457,20 @@ export function createWebController({
     document.querySelector("#retry").addEventListener("click", route);
   }
 
-  async function api(path) {
-    const response = await fetch(path, { headers: { Accept: "application/json" } });
+  async function api(path, { method = "GET", body: requestBody } = {}) {
+    const headers = { Accept: "application/json" };
+    if (requestBody !== undefined) headers["Content-Type"] = "application/json";
+    const response = await fetch(path, {
+      method,
+      headers,
+      ...(requestBody === undefined ? {} : { body: requestBody }),
+    });
     const body = await response.json();
-    if (!response.ok || body.error) throw new Error(body.error?.message || "Unable to load data");
+    if (!response.ok || body.error) {
+      const error = new Error(body.error?.message || "Unable to load data");
+      error.status = response.status;
+      throw error;
+    }
     return body;
   }
 
