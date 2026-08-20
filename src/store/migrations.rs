@@ -1,5 +1,5 @@
 pub(crate) const BASE_SCHEMA_VERSION: u32 = 1;
-pub(crate) const LATEST_SCHEMA_VERSION: u32 = 6;
+pub(crate) const LATEST_SCHEMA_VERSION: u32 = 7;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Migration {
@@ -38,6 +38,11 @@ pub(crate) fn migrations() -> &'static [Migration] {
             version: 6,
             name: "repair_blocked_decision_context",
             apply: migrate_to_blocked_decision_context,
+        },
+        Migration {
+            version: 7,
+            name: "jsonl_audit_cursor",
+            apply: migrate_to_jsonl_audit,
         },
     ]
 }
@@ -220,6 +225,36 @@ fn migrate_to_blocked_decision_context(
     Ok(())
 }
 
+fn migrate_to_jsonl_audit(
+    transaction: &rusqlite::Transaction<'_>,
+) -> Result<(), rusqlite::Error> {
+    transaction.execute("ALTER TABLE audit_events ADD COLUMN sequence INTEGER", [])?;
+    transaction.execute(
+        "UPDATE audit_events
+         SET sequence = (
+             SELECT COUNT(*)
+             FROM audit_events AS previous
+             WHERE previous.rowid <= audit_events.rowid
+         )",
+        [],
+    )?;
+    transaction.execute(
+        "CREATE UNIQUE INDEX audit_events_sequence ON audit_events(sequence)",
+        [],
+    )?;
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS audit_jsonl_cursor (
+             id INTEGER PRIMARY KEY CHECK (id = 1),
+             sequence INTEGER NOT NULL CHECK (sequence >= 0),
+             previous_hash TEXT,
+             updated_at TEXT NOT NULL
+         );
+         INSERT OR IGNORE INTO audit_jsonl_cursor (id, sequence, previous_hash, updated_at)
+         VALUES (1, 0, NULL, datetime('now'));",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     fn failing_migration(transaction: &rusqlite::Transaction<'_>) -> Result<(), rusqlite::Error> {
@@ -274,7 +309,8 @@ mod tests {
         assert!(super::is_supported_version(4));
         assert!(super::is_supported_version(5));
         assert!(super::is_supported_version(6));
-        assert!(!super::is_supported_version(7));
+        assert!(super::is_supported_version(7));
+        assert!(!super::is_supported_version(8));
     }
 
     #[test]
@@ -299,7 +335,7 @@ mod tests {
             let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
             assert_eq!(
                 applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-                vec![3, 4, 5, 6]
+                vec![3, 4, 5, 6, 7]
             );
             transaction.commit().unwrap();
         }
@@ -308,7 +344,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            6
+            7
         );
         for table in [
             "issue_dependencies",
@@ -378,7 +414,7 @@ mod tests {
             let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
             assert_eq!(
                 applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-                vec![4, 5, 6]
+                vec![4, 5, 6, 7]
             );
             transaction.commit().unwrap();
         }
@@ -387,7 +423,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            6
+            7
         );
         assert_eq!(
             connection
@@ -455,6 +491,8 @@ mod tests {
                      resolver_session_id TEXT,
                      created_at TEXT NOT NULL,
                      resolved_at TEXT
+                 );
+                 CREATE TABLE audit_events (id TEXT PRIMARY KEY);",
                  );",
             )
             .unwrap();
@@ -466,7 +504,7 @@ mod tests {
             let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
             assert_eq!(
                 applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-                vec![6]
+                vec![6, 7]
             );
             transaction.commit().unwrap();
         }
@@ -493,7 +531,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            6
+            7
         );
     }
 
@@ -510,7 +548,7 @@ mod tests {
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .unwrap();
             let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
-            assert_eq!(applied.len(), 5);
+            assert_eq!(applied.len(), 6);
             transaction.commit().unwrap();
         }
 
@@ -520,5 +558,116 @@ mod tests {
         let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
         assert!(applied.is_empty());
         transaction.commit().unwrap();
+    }
+
+    #[test]
+    fn schema_v7_adds_jsonl_cursor() {
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection.pragma_update(None, "user_version", 6).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                     version INTEGER PRIMARY KEY,
+                     name TEXT NOT NULL,
+                     applied_at TEXT NOT NULL
+                 );
+                 CREATE TABLE audit_events (
+                     id TEXT PRIMARY KEY,
+                     occurred_at TEXT NOT NULL
+                 );",
+            )
+            .unwrap();
+
+        {
+            let transaction = connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .unwrap();
+            let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
+            assert_eq!(
+                applied.iter().map(|item| item.version).collect::<Vec<_>>(),
+                vec![7]
+            );
+            transaction.commit().unwrap();
+        }
+
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            7
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('audit_events') WHERE name = 'sequence'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'audit_jsonl_cursor'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        let cursor = connection
+            .query_row(
+                "SELECT id, sequence, previous_hash FROM audit_jsonl_cursor",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(cursor, (1, 0, None));
+    }
+
+    #[test]
+    fn schema_v7_backfills_audit_sequence() {
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection.pragma_update(None, "user_version", 6).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                     version INTEGER PRIMARY KEY,
+                     name TEXT NOT NULL,
+                     applied_at TEXT NOT NULL
+                 );
+                 CREATE TABLE audit_events (
+                     id TEXT PRIMARY KEY,
+                     occurred_at TEXT NOT NULL
+                 );
+                 INSERT INTO audit_events (id, occurred_at) VALUES ('first', '2026-01-01T00:00:00Z');
+                 INSERT INTO audit_events (id, occurred_at) VALUES ('second', '2026-01-01T00:00:01Z');",
+            )
+            .unwrap();
+
+        {
+            let transaction = connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .unwrap();
+            super::apply_pending(&transaction, super::migrations()).unwrap();
+            transaction.commit().unwrap();
+        }
+
+        let mut statement = connection
+            .prepare("SELECT id, sequence FROM audit_events ORDER BY sequence")
+            .unwrap();
+        let rows = statement
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(rows, vec![("first".to_owned(), 1), ("second".to_owned(), 2)]);
     }
 }

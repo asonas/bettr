@@ -61,6 +61,7 @@ CREATE TABLE schema_migrations (
 
 CREATE TABLE audit_events (
     id TEXT PRIMARY KEY,
+    sequence INTEGER NOT NULL UNIQUE,
     occurred_at TEXT NOT NULL,
     started_at TEXT NOT NULL,
     finished_at TEXT NOT NULL,
@@ -84,6 +85,17 @@ CREATE INDEX audit_events_project_id ON audit_events(project_id);
 CREATE INDEX audit_events_operation ON audit_events(operation);
 CREATE INDEX audit_events_finished_at ON audit_events(finished_at);
 CREATE INDEX audit_events_idempotency_key ON audit_events(idempotency_key);
+CREATE INDEX audit_events_sequence ON audit_events(sequence);
+
+CREATE TABLE audit_jsonl_cursor (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    sequence INTEGER NOT NULL CHECK (sequence >= 0),
+    previous_hash TEXT,
+    updated_at TEXT NOT NULL
+);
+
+INSERT INTO audit_jsonl_cursor (id, sequence, previous_hash, updated_at)
+VALUES (1, 0, NULL, datetime('now'));
 
 CREATE TABLE idempotency_records (
     idempotency_key TEXT PRIMARY KEY,
@@ -161,4 +173,4 @@ CREATE INDEX decision_requests_status
     ON decision_requests(status);
 
 PRAGMA application_id = 1112822866;
-PRAGMA user_version = 6;
+PRAGMA user_version = 7;
