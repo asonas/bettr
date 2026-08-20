@@ -52,6 +52,13 @@ export function createWebController({
     }[character]));
   }
 
+  function escapeDisplayText(value) {
+    const text = String(value ?? "")
+      .replace(/\r\n?/g, "\n")
+      .replace(/\\r\\n|\\n|\\r/g, "\n");
+    return escapeHtml(text);
+  }
+
   function formatDate(value) {
     if (!value) return "—";
     return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(value));
@@ -147,9 +154,9 @@ export function createWebController({
       const label = event.event_type === "comment_added" ? "Comment" : (event.event_type || "Activity").replaceAll("_", " ");
       const actor = event.context?.agent || event.context?.operator || event.context?.kind || "system";
       const session = event.context?.session_id ? ` · ${event.context.session_id}` : "";
-      return `<article class="activity-item"><div class="activity-meta"><span class="activity-type">${escapeHtml(label)} · ${escapeHtml(actor)}${escapeHtml(session)}</span><time datetime="${escapeHtml(event.created_at)}">${formatDate(event.created_at)}</time></div><p class="activity-body">${escapeHtml(body || "Change recorded")}</p></article>`;
+      return `<article class="activity-item"><div class="activity-meta"><span class="activity-type">${escapeHtml(label)} · ${escapeHtml(actor)}${escapeHtml(session)}</span><time datetime="${escapeHtml(event.created_at)}">${formatDate(event.created_at)}</time></div><p class="activity-body display-text">${escapeDisplayText(body || "Change recorded")}</p></article>`;
     }).join("");
-    app.innerHTML = `<div class="detail-layout"><article><p class="eyebrow">${escapeHtml(project)} / Issue ${number}</p><div class="detail-key-row"><p class="detail-key">${escapeHtml(key)} · revision ${issue.revision}</p>${copyIssueButton(key)}</div><h1 class="detail-title" tabindex="-1">${escapeHtml(issue.title)}</h1><div class="detail-body">${escapeHtml(issue.body || "")}</div>${renderDecisionSection(decisions, issue.revision, wait)}<h2 class="activity-heading">Activity</h2><div class="activity-list">${activity || `<div class="empty-state"><strong>No activity yet</strong><span>Comments and state changes from the CLI will appear here.</span></div>`}</div></article><aside class="property-rail" aria-label="Issue properties"><dl class="property-list"><div><dt>State</dt><dd><span class="state-pill ${escapeHtml(issue.state)}">${escapeHtml(statusLabels[issue.state] || issue.state)}</span></dd></div><div><dt>Priority</dt><dd>${escapeHtml(issue.priority || "Not set")}</dd></div><div><dt>Assignee</dt><dd>${escapeHtml(issue.assignee_name || "Unassigned")}</dd></div><div><dt>Created</dt><dd>${formatDate(issue.created_at)}</dd></div><div><dt>Updated</dt><dd>${formatDate(issue.updated_at)}</dd></div><div><dt>Wait</dt><dd>${wait ? `${escapeHtml(wait.label)}: ${escapeHtml(wait.reason)}` : "No active wait"}</dd></div><div><dt>Context</dt><dd>revision ${issue.revision}</dd></div></dl></aside></div>`;
+    app.innerHTML = `<div class="detail-layout"><article><p class="eyebrow">${escapeHtml(project)} / Issue ${number}</p><div class="detail-key-row"><p class="detail-key">${escapeHtml(key)} · revision ${issue.revision}</p>${copyIssueButton(key)}</div><h1 class="detail-title" tabindex="-1">${escapeHtml(issue.title)}</h1><div class="detail-body display-text">${escapeDisplayText(issue.body || "")}</div>${renderDecisionSection(decisions, issue.revision, wait)}<h2 class="activity-heading">Activity</h2><div class="activity-list">${activity || `<div class="empty-state"><strong>No activity yet</strong><span>Comments and state changes from the CLI will appear here.</span></div>`}</div></article><aside class="property-rail" aria-label="Issue properties"><dl class="property-list"><div><dt>State</dt><dd><span class="state-pill ${escapeHtml(issue.state)}">${escapeHtml(statusLabels[issue.state] || issue.state)}</span></dd></div><div><dt>Priority</dt><dd>${escapeHtml(issue.priority || "Not set")}</dd></div><div><dt>Assignee</dt><dd>${escapeHtml(issue.assignee_name || "Unassigned")}</dd></div><div><dt>Created</dt><dd>${formatDate(issue.created_at)}</dd></div><div><dt>Updated</dt><dd>${formatDate(issue.updated_at)}</dd></div><div><dt>Wait</dt><dd>${wait ? `${escapeHtml(wait.label)}: ${escapeDisplayText(wait.reason)}` : "No active wait"}</dd></div><div><dt>Context</dt><dd>revision ${issue.revision}</dd></div></dl></aside></div>`;
     bindCopyButtons();
     bindDecisionForms(project, number);
     app.removeAttribute("aria-busy");
@@ -158,9 +165,9 @@ export function createWebController({
   function renderDecisionSection(decisions, revision, wait) {
     const unresolved = decisions.filter((decision) => decision.status === "open");
     const resolved = decisions.filter((decision) => decision.status !== "open");
-    const waitMarkup = wait ? `<section class="wait-context" aria-live="polite"><h2>${escapeHtml(wait.kind === "human" ? "Waiting for a decision" : "Waiting context")}</h2><p class="wait-kind">${escapeHtml(wait.label)}</p><p>${escapeHtml(wait.reason)}</p></section>` : "";
+    const waitMarkup = wait ? `<section class="wait-context" aria-live="polite"><h2>${escapeHtml(wait.kind === "human" ? "Waiting for a decision" : "Waiting context")}</h2><p class="wait-kind">${escapeHtml(wait.label)}</p><p class="display-text">${escapeDisplayText(wait.reason)}</p></section>` : "";
     const resolvedMarkup = resolved.length
-      ? `<div class="decision-history" aria-label="Resolved decisions">${resolved.map((decision) => `<article class="decision-record"><div class="decision-record-header"><strong>Decision resolved</strong><span>${escapeHtml(formatDate(decision.resolved_at || decision.created_at))}</span></div><p>${escapeHtml(decision.question)}</p>${decision.answer ? `<p class="decision-answer">Answer: ${escapeHtml(decision.answer)}</p>` : ""}</article>`).join("")}</div>`
+      ? `<div class="decision-history" aria-label="Resolved decisions">${resolved.map((decision) => `<article class="decision-record"><div class="decision-record-header"><strong>Decision resolved</strong><span>${escapeHtml(formatDate(decision.resolved_at || decision.created_at))}</span></div><p class="display-text">${escapeDisplayText(decision.question)}</p>${decision.answer ? `<p class="decision-answer display-text">Answer: ${escapeDisplayText(decision.answer)}</p>` : ""}</article>`).join("")}</div>`
       : "";
     const content = unresolved.length
       ? `<p class="decision-intro">A human answer is needed before this Issue can continue. Each request is resolved separately.</p><div class="decision-forms">${unresolved.map((decision) => decisionForm(decision, revision)).join("")}</div>`
@@ -174,8 +181,8 @@ export function createWebController({
     const options = Object.entries(decisionStateLabels).map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
     return `<form class="decision-form" data-decision-form="${id}" data-revision="${revision}" aria-labelledby="${fieldId("question")}" aria-describedby="${fieldId("feedback")}">
       <fieldset>
-        <legend id="${fieldId("question")}">${escapeHtml(decision.question)}</legend>
-        <p class="decision-background">${escapeHtml(decision.background || "No additional background was provided.")}</p>
+        <legend id="${fieldId("question")}" class="display-text">${escapeDisplayText(decision.question)}</legend>
+        <p class="decision-background display-text">${escapeDisplayText(decision.background || "No additional background was provided.")}</p>
         <p class="required-note"><span aria-hidden="true">*</span> Required</p>
         <label for="${fieldId("answer")}">Answer <span aria-hidden="true">*</span></label>
         <textarea id="${fieldId("answer")}" name="answer" rows="3" required></textarea>

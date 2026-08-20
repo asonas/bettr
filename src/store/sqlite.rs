@@ -1,6 +1,7 @@
 pub struct Database {
     connection: rusqlite::Connection,
     pending_idempotency: Option<IdempotencyRequest>,
+    audit_enabled: bool,
 }
 
 const BETTR_APPLICATION_ID: u32 = 0x4254_5452;
@@ -262,6 +263,14 @@ impl Database {
         }
 
         Self::open_verified(path)
+    }
+
+    pub(crate) fn open_for_web_read(
+        path: &std::path::Path,
+    ) -> Result<Self, crate::error::AppError> {
+        let mut database = Self::open(path)?;
+        database.audit_enabled = false;
+        Ok(database)
     }
 
     #[allow(dead_code)]
@@ -2812,6 +2821,9 @@ impl Database {
         changed_fields: &[&str],
         started_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), crate::error::AppError> {
+        if !self.audit_enabled {
+            return Ok(());
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -2976,7 +2988,7 @@ impl Database {
         // A failure audit uses the same writer lock, so it cannot be persisted while
         // the original operation is reporting that lock as busy. Preserve the
         // actionable busy error instead of waiting again and replacing it.
-        if matches!(error, crate::error::AppError::DatabaseBusy(_)) {
+        if !self.audit_enabled || matches!(error, crate::error::AppError::DatabaseBusy(_)) {
             return Ok(());
         }
         let transaction = self
@@ -3959,6 +3971,7 @@ impl Database {
         Ok(Self {
             connection,
             pending_idempotency: None,
+            audit_enabled: true,
         })
     }
 

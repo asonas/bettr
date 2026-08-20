@@ -240,6 +240,32 @@ fn web_serves_project_issue_detail_with_activity() {
 }
 
 #[test]
+fn web_read_endpoints_do_not_append_audit_events() {
+    let app = initialize_app();
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    let before: i64 = connection
+        .query_row("SELECT COUNT(*) FROM audit_events", [], |row| row.get(0))
+        .unwrap();
+    drop(connection);
+    let server = WebProcess::start(&app);
+
+    for path in [
+        "/api/status",
+        "/api/projects",
+        "/api/issues/1?project=bettr",
+    ] {
+        let (status, body) = server.get(path);
+        assert_eq!(status, 200, "{path}: {body}");
+    }
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    let after: i64 = connection
+        .query_row("SELECT COUNT(*) FROM audit_events", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(after, before);
+}
+
+#[test]
 fn web_exposes_waiting_context_and_multiple_decisions() {
     let app = initialize_app();
     let first = request_decision(&app, "Which parser should be used?", "session-a");
@@ -363,6 +389,19 @@ fn web_resolves_a_decision_with_the_existing_human_contract() {
     let response: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(response["data"]["status"], "resolved");
     assert_eq!(response["data"]["resolver_kind"], "human");
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM audit_events
+                 WHERE operation = 'decision_resolve' AND success = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
 
     let (status, body) = server.get("/api/issues/1?project=bettr");
     assert_eq!(status, 200);

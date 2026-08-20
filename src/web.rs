@@ -220,11 +220,11 @@ fn route_request(database_path: &std::path::Path, request: &Request) -> HttpResp
         "/app.css" => HttpResponse::text(200, "text/css; charset=utf-8", APP_CSS),
         "/state.js" => HttpResponse::text(200, "text/javascript; charset=utf-8", STATE_JS),
         "/app.js" => HttpResponse::text(200, "text/javascript; charset=utf-8", APP_JS),
-        "/api/status" => with_database(database_path, |app| web_status(app).map(json_success)),
+        "/api/status" => with_read_database(database_path, |app| web_status(app).map(json_success)),
         "/api/projects" => {
-            with_database(database_path, |app| app.list_projects().map(json_success))
+            with_read_database(database_path, |app| app.list_projects().map(json_success))
         }
-        "/api/issues" => with_database(database_path, |app| {
+        "/api/issues" => with_read_database(database_path, |app| {
             let filter = issue_filter(&request.query)?;
             let issues = app.list_issues(&filter)?;
             issues
@@ -253,7 +253,7 @@ fn route_request(database_path: &std::path::Path, request: &Request) -> HttpResp
                     ),
                 );
             };
-            with_database(database_path, |app| {
+            with_read_database(database_path, |app| {
                 let issue = app.show_issue(project, number)?;
                 let history = app.issue_history(project, number)?;
                 let decisions = app.list_decisions(project, number)?;
@@ -462,6 +462,17 @@ where
     F: FnOnce(&mut crate::app::App) -> Result<HttpResponse, crate::error::AppError>,
 {
     match crate::store::Database::open(database_path) {
+        Ok(database) => operation(&mut crate::app::App::new(database))
+            .unwrap_or_else(|error| error_response(status_code(&error), error)),
+        Err(error) => error_response(status_code(&error), error),
+    }
+}
+
+fn with_read_database<F>(database_path: &std::path::Path, operation: F) -> HttpResponse
+where
+    F: FnOnce(&mut crate::app::App) -> Result<HttpResponse, crate::error::AppError>,
+{
+    match crate::store::Database::open_for_web_read(database_path) {
         Ok(database) => operation(&mut crate::app::App::new(database))
             .unwrap_or_else(|error| error_response(status_code(&error), error)),
         Err(error) => error_response(status_code(&error), error),

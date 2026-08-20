@@ -169,7 +169,8 @@ h1 { margin: 0; font-size: clamp(26px, 3vw, 36px); font-weight: 720; letter-spac
 .detail-title { margin: 7px 0 12px; font-size: clamp(27px, 4vw, 40px); line-height: 1.08; }
 .detail-key-row { display: flex; align-items: center; gap: 9px; margin: 1em 0; }
 .detail-key { margin: 0; color: var(--ink-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
-.detail-body { margin: 29px 0 37px; color: var(--ink); font-size: 14px; line-height: 1.75; white-space: pre-wrap; }
+.display-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.detail-body { margin: 29px 0 37px; color: var(--ink); font-size: 14px; line-height: 1.75; }
 .detail-body:empty::before { color: var(--ink-faint); content: "No body"; }
 .decision-section { display: grid; gap: 12px; margin: 38px 0 42px; }
 .decision-section > h2, .wait-context h2 { margin: 0; color: var(--ink-muted); font-size: 11px; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
@@ -200,14 +201,13 @@ h1 { margin: 0; font-size: clamp(26px, 3vw, 36px); font-weight: 720; letter-spac
 .decision-record p { margin: 6px 0 0; color: var(--ink-muted); font-size: 11px; line-height: 1.45; }
 .decision-record-header { display: flex; justify-content: space-between; gap: 12px; color: var(--success); font-size: 11px; }
 .decision-record-header span { color: var(--ink-faint); font-weight: 400; }
-.decision-answer { white-space: pre-wrap; }
 .activity-heading { display: flex; align-items: center; gap: 9px; margin: 0 0 12px; color: var(--ink-muted); font-size: 11px; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
 .activity-heading::after { height: 1px; flex: 1; background: var(--line); content: ""; }
 .activity-list { display: grid; gap: 10px; }
 .activity-item { padding: 13px 15px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
 .activity-meta { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 7px; color: var(--ink-faint); font-size: 10px; }
 .activity-type { color: var(--accent-strong); font-weight: 650; }
-.activity-body { margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+.activity-body { margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.55; }
 .property-rail { position: sticky; top: 30px; padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
 .property-list { display: grid; gap: 16px; margin: 0; }
 .property-list div { display: grid; gap: 5px; }
