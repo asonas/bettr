@@ -1,6 +1,6 @@
 # Blocked Reasons and Human Decision Resolution Web UI
 
-> Status: approved design, implementation in progress
+> Status: implemented and verified
 
 ## Goal
 

@@ -128,7 +128,7 @@ bettr audit list
 
 ## Local web UI
 
-Start the read-only, loopback-only web view:
+Start the loopback-only web view:
 
 ```sh
 bettr web
@@ -136,16 +136,32 @@ bettr web
 
 Then open the URL printed by bettr, usually `http://127.0.0.1:4242`. Use
 `--port 0` when an available port should be selected automatically. The
-server never binds to a non-loopback address and keeps the CLI as the only
-mutation path.
+server never binds to a non-loopback address. The UI is primarily a read view;
+the only write route resolves an existing human decision through the same
+state, revision, permission, and audit contract as the CLI. Issue edits,
+claims, comments, and other mutations remain CLI operations.
 
 Projects opens a five-column Kanban board for Todo, In progress, Blocked,
 Done, and Cancelled. The sidebar lists projects directly; selecting one
 filters the board and selecting a card opens a URL-addressable detail view
-with its activity and properties. The browser polls the local read API,
-moves changed Issues to their current status column, and marks updated cards
-with a cyan edge until they are opened. The header exposes a compact dropdown
-for reviewing those updated Issues. The CLI remains the only mutation path.
+with its activity, waiting context, dependencies, and decision requests. An
+open human decision has its question, background, current revision, and a
+state-specific answer form; submitting the form resolves only that existing
+decision. The browser polls the local API, moves changed Issues to their
+current status column, and marks updated cards with a cyan edge until they are
+opened. The header exposes a compact dropdown for reviewing those updated
+Issues.
+
+For an open human decision, the detail view shows the question, background,
+waiting context, and current revision, then exposes one answer form per
+request. The form uses `POST /api/decisions/<request-uuid>/resolve` with the
+displayed `expected_revision` and only the valid next states `todo`, `blocked`,
+`done`, or `cancelled`. Required transition fields are `reason` and
+`wait_kind` for `blocked`, `summary` and `verification` for `done`, and
+`reason` for `cancelled`; a revision conflict or unknown outcome requires
+reloading the Issue before submitting again. The route is loopback-only,
+human-context-only, and has no public authentication or external bind; JSONL
+audit export remains outside this feature.
 
 The production server still serves embedded HTML, CSS, and Vanilla JavaScript
 assets and has no frontend runtime dependency. Frontend behavior is tested

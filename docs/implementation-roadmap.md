@@ -24,7 +24,7 @@ Phase 3では、SQLiteを正本とする追記専用JSON Lines監査ログ、ハ
 
 ## Local Web UI
 
-Web UIはネットワーク共有を目的とせず、`bettr web`でloopbackにだけバインドする読み取りビューとして提供します。Projectsの5列Kanban、プロジェクト別サイドバー、Issue詳細のActivity、ポーリングによる更新インジケーターを提供し、Issueの変更はCLIから行います。初期実装はRust標準ライブラリのHTTPサーバーと埋め込みVanilla JavaScriptを使います。更新はヘッダーの件数メニューとカード左端のシアン色で示し、通知バナーは使いません。DOM描画・ポーリング・フォーカスはVitest + jsdomで、状態投影の不変条件はNode testでテストし、RustテストはHTTP/API境界に限定します。必要な検索・フィルター・イベントカーソルは別計画に分けます。
+Web UIはネットワーク共有を目的とせず、`bettr web`でloopbackにだけバインドする監督ビューとして提供します。Projectsの5列Kanban、プロジェクト別サイドバー、Issue詳細のActivity、待機理由・待機種別・判断要求、既存human decisionの解決、ポーリングによる更新インジケーターを提供します。Webの書き込みは表示したrevisionを使うdecision解決だけに限定し、Issueの編集・claim・コメントなどはCLIから行います。初期実装はRust標準ライブラリのHTTPサーバーと埋め込みVanilla JavaScriptを使います。更新はヘッダーの件数メニューとカード左端のシアン色で示し、通知バナーは使いません。DOM描画・ポーリング・フォーカスはVitest + jsdomで、状態投影の不変条件はNode testでテストし、RustテストはHTTP/API境界に限定します。必要な検索・フィルター・イベントカーソルは別計画に分けます。
 
 ## Skills and Distribution
 
