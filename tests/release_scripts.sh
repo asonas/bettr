@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+fixture_root=$(mktemp -d)
+trap 'rm -rf "$fixture_root"' EXIT HUP INT TERM
+
+mkdir -p "$fixture_root/bin" "$fixture_root/out"
+printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "bettr 9.9.9"' > "$fixture_root/bin/bettr"
+chmod 755 "$fixture_root/bin/bettr"
+
+"$repo_root/scripts/package-release.sh" 9.9.9 x86_64-unknown-linux-gnu \
+  "$fixture_root/bin/bettr" "$fixture_root/out"
+
+archive="$fixture_root/out/bettr-9.9.9-x86_64-unknown-linux-gnu.tar.gz"
+checksum="$archive.sha256"
+test -f "$archive"
+test -f "$checksum"
+grep -Eq '^[0-9a-f]{64}[[:space:]][[:space:]]bettr-9\.9\.9-x86_64-unknown-linux-gnu\.tar\.gz$' "$checksum"
+
+"$repo_root/scripts/verify-release.sh" "$archive" "$checksum" 9.9.9
+
+archive_listing=$(tar -tzf "$archive")
+printf '%s\n' "$archive_listing" | grep -Fx 'bettr'
+printf '%s\n' "$archive_listing" | grep -Fx 'LICENSE'
