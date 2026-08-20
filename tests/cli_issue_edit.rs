@@ -136,6 +136,62 @@ fn issue_edit_changes_fields_preserves_omissions_and_supports_explicit_clearing(
 }
 
 #[test]
+fn issue_edit_replays_after_the_issue_has_moved_to_a_new_revision() {
+    let app = initialized_issue();
+    let first_arguments = [
+        "issue",
+        "edit",
+        "1",
+        "--project",
+        "bettr",
+        "--revision",
+        "1",
+        "--title",
+        "First title",
+        "--idempotency-key",
+        "issue-edit-1",
+        "--json",
+    ];
+    let first = app.command().args(first_arguments).output().unwrap();
+    assert!(first.status.success());
+
+    app.command()
+        .args([
+            "issue",
+            "edit",
+            "1",
+            "--project",
+            "bettr",
+            "--revision",
+            "2",
+            "--title",
+            "Second title",
+            "--idempotency-key",
+            "issue-edit-2",
+        ])
+        .assert()
+        .success();
+
+    let replay = app.command().args(first_arguments).output().unwrap();
+    assert!(replay.status.success());
+    assert_eq!(first.stdout, replay.stdout);
+    assert_eq!(show_issue(&app)["revision"], 3);
+    assert_eq!(show_issue(&app)["title"], "Second title");
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM domain_events WHERE event_type = 'issue_updated'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
 fn issue_edit_requires_a_revision_and_at_least_one_patch_field() {
     let app = initialized_issue();
 

@@ -59,8 +59,12 @@ fn run(
         crate::cli::Command::Init(_) => {
             let started_at = chrono::Utc::now();
             let execution_context = crate::domain::ExecutionContext::resolve()?;
-            let _database =
-                crate::store::Database::initialize(&database_path, &execution_context, started_at)?;
+            let _database = crate::store::Database::initialize_with_idempotency(
+                &database_path,
+                &execution_context,
+                started_at,
+                idempotency_key.as_deref(),
+            )?;
             match output_mode {
                 crate::output::OutputMode::Human => println!("initialized"),
                 crate::output::OutputMode::Json => {
@@ -121,6 +125,17 @@ fn run(
                             crate::output::write_issue_created_human(project, &issue)
                         }
                         crate::output::OutputMode::Json => crate::output::write_success(issue),
+                    }
+                }
+                crate::cli::IssueSubcommand::Batch(batch_command) => {
+                    let context = crate::domain::ExecutionContext::resolve()?;
+                    let results =
+                        app.batch_issues(&batch_command.input, project.as_deref(), &context)?;
+                    match output_mode {
+                        crate::output::OutputMode::Human => {
+                            crate::output::write_batch_human(&results)
+                        }
+                        crate::output::OutputMode::Json => crate::output::write_success(results),
                     }
                 }
                 crate::cli::IssueSubcommand::Show(show_command) => {

@@ -1,5 +1,6 @@
 pub struct Database {
     connection: rusqlite::Connection,
+    pending_idempotency: Option<IdempotencyRequest>,
 }
 
 const BETTR_APPLICATION_ID: u32 = 0x4254_5452;
@@ -145,11 +146,62 @@ pub(crate) struct AuditedResult<T> {
 }
 
 impl Database {
+    pub(crate) fn with_idempotency<T, F>(
+        &mut self,
+        request: Option<IdempotencyRequest>,
+        action: F,
+    ) -> T
+    where
+        F: FnOnce(&mut Self) -> T,
+    {
+        self.pending_idempotency = request;
+        let result = action(self);
+        self.pending_idempotency = None;
+        result
+    }
+
+    fn take_idempotency(
+        &mut self,
+        operation: &str,
+    ) -> Result<Option<IdempotencyRequest>, crate::error::AppError> {
+        let request = self.pending_idempotency.take();
+        if request
+            .as_ref()
+            .is_some_and(|request| request.operation != operation)
+        {
+            return Err(crate::error::AppError::Internal(
+                "idempotency request operation does not match the write operation".to_owned(),
+            ));
+        }
+        Ok(request)
+    }
+
+    #[allow(dead_code)]
     pub fn initialize(
         path: &std::path::Path,
         context: &crate::domain::ExecutionContext,
         started_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<Self, crate::error::AppError> {
+        Self::initialize_with_idempotency(path, context, started_at, None)
+    }
+
+    pub fn initialize_with_idempotency(
+        path: &std::path::Path,
+        context: &crate::domain::ExecutionContext,
+        started_at: chrono::DateTime<chrono::Utc>,
+        idempotency_key: Option<&str>,
+    ) -> Result<Self, crate::error::AppError> {
+        let idempotency = idempotency_key
+            .map(|key| {
+                IdempotencyRequest::new(
+                    key,
+                    "init",
+                    serde_json::json!({
+                        "database": path.to_string_lossy(),
+                    }),
+                )
+            })
+            .transpose()?;
         Self::create_parent_directory(path)?;
 
         let file = match std::fs::OpenOptions::new()
@@ -162,12 +214,17 @@ impl Database {
                 let error = crate::error::AppError::DatabaseAlreadyInitialized;
                 if Self::is_initialized_database(path).unwrap_or(false) {
                     let mut database = Self::open(path)?;
-                    database.record_failed_operation(
+                    if let Some(result) = database.lookup_idempotency(idempotency.as_ref())? {
+                        let _: serde_json::Value = result;
+                        return Ok(database);
+                    }
+                    database.record_failed_operation_with_idempotency(
                         "init",
                         context,
                         &error,
                         &AuditSubject::default(),
                         started_at,
+                        idempotency.as_ref().map(|request| request.key.as_str()),
                     )?;
                 }
                 return Err(error);
@@ -184,7 +241,7 @@ impl Database {
             }
         };
 
-        if let Err(error) = database.initialize_schema(context, started_at) {
+        if let Err(error) = database.initialize_schema(context, started_at, idempotency.as_ref()) {
             drop(database);
             return Err(Self::cleanup_after_initialization_failure(path, error));
         }
@@ -217,7 +274,8 @@ impl Database {
         name: &str,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::Project, crate::error::AppError> {
-        self.create_project_with_idempotency(name, context, None)
+        let idempotency = self.take_idempotency("project_create")?;
+        self.create_project_with_idempotency(name, context, idempotency.as_ref())
     }
 
     pub fn create_project_with_idempotency(
@@ -279,7 +337,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "project_create",
-                idempotency_key: idempotency.map(|request| request.key.as_str()),
+                idempotency_key: idempotency.as_ref().map(|request| request.key.as_str()),
                 success: true,
                 context,
                 target: Some(("project", &project_id)),
@@ -327,6 +385,517 @@ impl Database {
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::Issue, crate::error::AppError> {
         self.create_issue_once(project_name, input, context)
+    }
+
+    pub fn batch_issues(
+        &mut self,
+        operations: &[crate::domain::BatchOperation],
+        default_project: Option<&str>,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<Vec<crate::domain::BatchResult>, crate::error::AppError> {
+        let idempotency = self.take_idempotency("issue_batch")?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::AppError::from)?;
+        if let Some(results) = Self::check_idempotency(&transaction, idempotency.as_ref())? {
+            return Ok(results);
+        }
+        if operations.is_empty() {
+            return Err(crate::error::AppError::InvalidInput(
+                "issue batch input must contain at least one operation".to_owned(),
+            ));
+        }
+        let mut results = Vec::with_capacity(operations.len());
+        for operation in operations {
+            results.push(Self::batch_operation_in_transaction(
+                &transaction,
+                operation,
+                default_project,
+                context,
+            )?);
+        }
+        let project = default_project
+            .map(|name| Self::project_id_in_transaction(&transaction, name).map(|id| (id, name)))
+            .transpose()?;
+        Self::insert_audit_event(
+            &transaction,
+            AuditInsert {
+                operation: "issue_batch",
+                idempotency_key: idempotency.as_ref().map(|request| request.key.as_str()),
+                success: true,
+                context,
+                target: None,
+                project,
+                revision: None,
+                started_at: chrono::Utc::now(),
+                exit_code: 0,
+                changed_fields: &[],
+                metadata_json: "{}",
+            },
+        )?;
+        Self::remember_idempotency(&transaction, idempotency.as_ref(), &results)?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(results)
+    }
+
+    fn batch_operation_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        operation: &crate::domain::BatchOperation,
+        default_project: Option<&str>,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::BatchResult, crate::error::AppError> {
+        match operation {
+            crate::domain::BatchOperation::IssueCreate {
+                project,
+                title,
+                body,
+                priority,
+            } => {
+                let project = Self::batch_project(project.as_deref(), default_project)?;
+                let input = crate::domain::NewIssue {
+                    title: title.clone(),
+                    body: body.clone(),
+                    priority: *priority,
+                };
+                input.validate()?;
+                let issue =
+                    Self::batch_create_issue_in_transaction(transaction, project, &input, context)?;
+                Self::batch_result(operation.operation_name(), issue)
+            }
+            crate::domain::BatchOperation::IssueEdit {
+                project,
+                number,
+                revision,
+                patch,
+            } => {
+                let project = Self::batch_project(project.as_deref(), default_project)?;
+                if *number < 1 {
+                    return Err(crate::error::AppError::InvalidInput(
+                        "issue number must be positive".to_owned(),
+                    ));
+                }
+                if *revision < 1 {
+                    return Err(crate::error::AppError::InvalidInput(
+                        "issue revision must be positive".to_owned(),
+                    ));
+                }
+                patch.validate()?;
+                let issue = Self::batch_update_issue_in_transaction(
+                    transaction,
+                    project,
+                    *number,
+                    *revision,
+                    patch,
+                    context,
+                )?;
+                Self::batch_result(operation.operation_name(), issue)
+            }
+            crate::domain::BatchOperation::IssueComment {
+                project,
+                number,
+                body,
+            } => {
+                let project = Self::batch_project(project.as_deref(), default_project)?;
+                if *number < 1 {
+                    return Err(crate::error::AppError::InvalidInput(
+                        "issue number must be positive".to_owned(),
+                    ));
+                }
+                crate::domain::validate_comment_body(body)?;
+                let comment = Self::batch_comment_in_transaction(
+                    transaction,
+                    project,
+                    *number,
+                    body,
+                    context,
+                )?;
+                Self::batch_result(operation.operation_name(), comment)
+            }
+            crate::domain::BatchOperation::IssueStart {
+                project,
+                number,
+                revision,
+            } => Self::batch_transition_result(
+                transaction,
+                project.as_deref(),
+                default_project,
+                *number,
+                *revision,
+                Ok(crate::domain::Transition::Start),
+                context,
+            )
+            .and_then(|issue| Self::batch_result(operation.operation_name(), issue)),
+            crate::domain::BatchOperation::IssueBlock {
+                project,
+                number,
+                revision,
+                reason,
+                wait_kind,
+            } => Self::batch_transition_result(
+                transaction,
+                project.as_deref(),
+                default_project,
+                *number,
+                *revision,
+                crate::domain::Transition::block(reason.clone(), *wait_kind),
+                context,
+            )
+            .and_then(|issue| Self::batch_result(operation.operation_name(), issue)),
+            crate::domain::BatchOperation::IssueResume {
+                project,
+                number,
+                revision,
+            } => Self::batch_transition_result(
+                transaction,
+                project.as_deref(),
+                default_project,
+                *number,
+                *revision,
+                Ok(crate::domain::Transition::Resume),
+                context,
+            )
+            .and_then(|issue| Self::batch_result(operation.operation_name(), issue)),
+            crate::domain::BatchOperation::IssueComplete {
+                project,
+                number,
+                revision,
+                summary,
+                verification,
+            } => Self::batch_transition_result(
+                transaction,
+                project.as_deref(),
+                default_project,
+                *number,
+                *revision,
+                crate::domain::Transition::complete(summary.clone(), verification.clone()),
+                context,
+            )
+            .and_then(|issue| Self::batch_result(operation.operation_name(), issue)),
+            crate::domain::BatchOperation::IssueCancel {
+                project,
+                number,
+                revision,
+                reason,
+            } => Self::batch_transition_result(
+                transaction,
+                project.as_deref(),
+                default_project,
+                *number,
+                *revision,
+                crate::domain::Transition::cancel(reason.clone()),
+                context,
+            )
+            .and_then(|issue| Self::batch_result(operation.operation_name(), issue)),
+            crate::domain::BatchOperation::IssueReopen {
+                project,
+                number,
+                revision,
+                reason,
+            } => Self::batch_transition_result(
+                transaction,
+                project.as_deref(),
+                default_project,
+                *number,
+                *revision,
+                crate::domain::Transition::reopen(reason.clone()),
+                context,
+            )
+            .and_then(|issue| Self::batch_result(operation.operation_name(), issue)),
+        }
+    }
+
+    fn batch_project<'a>(
+        project: Option<&'a str>,
+        default_project: Option<&'a str>,
+    ) -> Result<&'a str, crate::error::AppError> {
+        let project = project.or(default_project).ok_or_else(|| {
+            crate::error::AppError::InvalidInput(
+                "issue batch operation requires a project or --project".to_owned(),
+            )
+        })?;
+        crate::domain::validate_project_name(project)?;
+        Ok(project)
+    }
+
+    fn batch_result<T: serde::Serialize>(
+        operation: &str,
+        result: T,
+    ) -> Result<crate::domain::BatchResult, crate::error::AppError> {
+        Ok(crate::domain::BatchResult {
+            operation: operation.to_owned(),
+            result: serde_json::to_value(result)
+                .map_err(|error| crate::error::AppError::Internal(error.to_string()))?,
+        })
+    }
+
+    fn batch_transition_result(
+        transaction: &rusqlite::Transaction<'_>,
+        project: Option<&str>,
+        default_project: Option<&str>,
+        number: i64,
+        revision: i64,
+        transition: Result<crate::domain::Transition, crate::domain::DomainError>,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        let project = Self::batch_project(project, default_project)?;
+        if number < 1 {
+            return Err(crate::error::AppError::InvalidInput(
+                "issue number must be positive".to_owned(),
+            ));
+        }
+        if revision < 1 {
+            return Err(crate::error::AppError::InvalidInput(
+                "issue revision must be positive".to_owned(),
+            ));
+        }
+        let issue = Self::batch_transition_in_transaction(
+            transaction,
+            project,
+            number,
+            revision,
+            transition?,
+            context,
+        )?;
+        Ok(issue)
+    }
+
+    fn batch_create_issue_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        project_name: &str,
+        input: &crate::domain::NewIssue,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        let project_id = Self::project_id_in_transaction(transaction, project_name)?;
+        let number = transaction
+            .query_row(
+                "SELECT COALESCE(MAX(number), 0) + 1 FROM issues WHERE project_id = ?1",
+                [project_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(crate::error::AppError::from)?;
+        let now = chrono::Utc::now();
+        let issue = crate::domain::Issue {
+            id: uuid::Uuid::new_v4(),
+            project_id,
+            number,
+            title: input.title.clone(),
+            body: input.body.clone(),
+            state: crate::domain::IssueState::Todo,
+            priority: input.priority,
+            assignee_kind: None,
+            assignee_name: None,
+            revision: 1,
+            created_at: now,
+            updated_at: now,
+        };
+        transaction
+            .execute(
+                "INSERT INTO issues (
+                    id, project_id, number, title, body, state, priority, assignee_kind,
+                    assignee_name, revision, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                rusqlite::params![
+                    issue.id.to_string(),
+                    issue.project_id.to_string(),
+                    issue.number,
+                    issue.title,
+                    issue.body,
+                    issue.state.as_str(),
+                    issue.priority.map(crate::domain::Priority::as_str),
+                    issue.assignee_kind.map(crate::domain::AssigneeKind::as_str),
+                    issue.assignee_name,
+                    issue.revision,
+                    issue.created_at.to_rfc3339(),
+                    issue.updated_at.to_rfc3339(),
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        let metadata = Self::event_metadata(
+            serde_json::json!({ "number": issue.number, "revision": issue.revision }),
+            context,
+        )?;
+        Self::insert_domain_event(transaction, &issue, "issue_created", &metadata, now)?;
+        Ok(issue)
+    }
+
+    fn batch_update_issue_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        project_name: &str,
+        number: i64,
+        expected_revision: i64,
+        patch: &crate::domain::IssuePatch,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        let project_id = Self::project_id_in_transaction(transaction, project_name)?;
+        let issue = Self::issue_in_transaction(transaction, project_id, number)?;
+        if issue.revision != expected_revision {
+            return Err(crate::error::AppError::RevisionConflict {
+                current_revision: issue.revision,
+            });
+        }
+        let mut updated_issue = issue.clone();
+        patch.apply_to(&mut updated_issue);
+        let updated_at = chrono::Utc::now();
+        updated_issue.revision += 1;
+        updated_issue.updated_at = updated_at;
+        transaction
+            .execute(
+                "UPDATE issues
+                 SET title = ?1, body = ?2, priority = ?3, assignee_kind = ?4,
+                     assignee_name = ?5, updated_at = ?6, revision = revision + 1
+                 WHERE id = ?7 AND revision = ?8",
+                rusqlite::params![
+                    updated_issue.title,
+                    updated_issue.body,
+                    updated_issue.priority.map(crate::domain::Priority::as_str),
+                    updated_issue
+                        .assignee_kind
+                        .map(crate::domain::AssigneeKind::as_str),
+                    updated_issue.assignee_name,
+                    updated_at.to_rfc3339(),
+                    issue.id.to_string(),
+                    expected_revision,
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        let metadata = Self::event_metadata(patch.event_metadata(updated_issue.revision), context)?;
+        Self::insert_domain_event(
+            transaction,
+            &updated_issue,
+            "issue_updated",
+            &metadata,
+            updated_at,
+        )?;
+        Ok(updated_issue)
+    }
+
+    fn batch_comment_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        project_name: &str,
+        number: i64,
+        body: &str,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::Comment, crate::error::AppError> {
+        let project_id = Self::project_id_in_transaction(transaction, project_name)?;
+        let issue = Self::issue_in_transaction(transaction, project_id, number)?;
+        let comment = crate::domain::Comment {
+            id: uuid::Uuid::new_v4(),
+            issue_id: issue.id,
+            body: body.to_owned(),
+            context: context.clone(),
+            created_at: chrono::Utc::now(),
+        };
+        transaction
+            .execute(
+                "INSERT INTO comments (
+                    id, issue_id, body, author_kind, author_name, created_at, metadata_json
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    comment.id.to_string(),
+                    comment.issue_id.to_string(),
+                    comment.body,
+                    context.kind.as_str(),
+                    context.initiator_name(),
+                    comment.created_at.to_rfc3339(),
+                    serde_json::json!({ "session_id": context.session_id }).to_string(),
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        transaction
+            .execute(
+                "UPDATE issues SET updated_at = ?1 WHERE id = ?2",
+                rusqlite::params![
+                    comment.created_at.to_rfc3339(),
+                    comment.issue_id.to_string()
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        let metadata = Self::event_metadata(
+            serde_json::json!({ "comment_id": comment.id, "body": comment.body }),
+            context,
+        )?;
+        Self::insert_domain_event(
+            transaction,
+            &issue,
+            "comment_added",
+            &metadata,
+            comment.created_at,
+        )?;
+        Ok(comment)
+    }
+
+    fn batch_transition_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        project_name: &str,
+        number: i64,
+        expected_revision: i64,
+        transition: crate::domain::Transition,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        let project_id = Self::project_id_in_transaction(transaction, project_name)?;
+        let issue = Self::issue_in_transaction(transaction, project_id, number)?;
+        if issue.revision != expected_revision {
+            return Err(crate::error::AppError::RevisionConflict {
+                current_revision: issue.revision,
+            });
+        }
+        let target_state = issue.state.apply(&transition)?;
+        if target_state == crate::domain::IssueState::Done {
+            let has_open_decision = transaction
+                .query_row(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM decision_requests
+                         WHERE issue_id = ?1 AND status = 'open'
+                     )",
+                    [issue.id.to_string()],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(crate::error::AppError::from)?;
+            if has_open_decision {
+                return Err(crate::error::AppError::Conflict(
+                    "Issue has an unresolved human decision".to_owned(),
+                ));
+            }
+        }
+        let updated_at = chrono::Utc::now();
+        transaction
+            .execute(
+                "UPDATE issues
+                 SET state = ?1, updated_at = ?2, revision = revision + 1
+                 WHERE id = ?3 AND revision = ?4",
+                rusqlite::params![
+                    target_state.as_str(),
+                    updated_at.to_rfc3339(),
+                    issue.id.to_string(),
+                    expected_revision,
+                ],
+            )
+            .map_err(crate::error::AppError::from)?;
+        if target_state != crate::domain::IssueState::InProgress {
+            transaction
+                .execute(
+                    "DELETE FROM issue_leases WHERE issue_id = ?1",
+                    [issue.id.to_string()],
+                )
+                .map_err(crate::error::AppError::from)?;
+        }
+        let mut updated_issue = issue.clone();
+        updated_issue.state = target_state;
+        updated_issue.revision += 1;
+        updated_issue.updated_at = updated_at;
+        let metadata = Self::event_metadata(
+            transition.event_metadata(issue.state, target_state, updated_issue.revision),
+            context,
+        )?;
+        Self::insert_domain_event(
+            transaction,
+            &updated_issue,
+            transition.event_type(),
+            &metadata,
+            updated_at,
+        )?;
+        Ok(updated_issue)
     }
 
     pub fn show_issue(
@@ -387,10 +956,14 @@ impl Database {
         target_state: crate::domain::IssueState,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        let idempotency = self.take_idempotency(transition.operation())?;
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(crate::error::AppError::from)?;
+        if let Some(issue) = Self::check_idempotency(&transaction, idempotency.as_ref())? {
+            return Ok(issue);
+        }
         let updated_at = chrono::Utc::now();
         if target_state == crate::domain::IssueState::Done {
             let has_open_decision = transaction
@@ -480,7 +1053,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: transition.operation(),
-                idempotency_key: None,
+                idempotency_key: idempotency.as_ref().map(|request| request.key.as_str()),
                 success: true,
                 context,
                 target: Some(("issue", &issue_id)),
@@ -492,6 +1065,7 @@ impl Database {
                 metadata_json: &audit_metadata,
             },
         )?;
+        Self::remember_idempotency(&transaction, idempotency.as_ref(), &updated_issue)?;
         transaction.commit().map_err(crate::error::AppError::from)?;
 
         Ok(updated_issue)
@@ -504,10 +1078,14 @@ impl Database {
         patch: &crate::domain::IssuePatch,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        let idempotency = self.take_idempotency("issue_edit")?;
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(crate::error::AppError::from)?;
+        if let Some(issue) = Self::check_idempotency(&transaction, idempotency.as_ref())? {
+            return Ok(issue);
+        }
         let updated_at = chrono::Utc::now();
         let mut updated_issue = issue.clone();
         patch.apply_to(&mut updated_issue);
@@ -577,7 +1155,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "issue_edit",
-                idempotency_key: None,
+                idempotency_key: idempotency.as_ref().map(|request| request.key.as_str()),
                 success: true,
                 context,
                 target: Some(("issue", &issue_id)),
@@ -589,6 +1167,7 @@ impl Database {
                 metadata_json: &audit_metadata,
             },
         )?;
+        Self::remember_idempotency(&transaction, idempotency.as_ref(), &updated_issue)?;
         transaction.commit().map_err(crate::error::AppError::from)?;
 
         Ok(updated_issue)
@@ -601,12 +1180,24 @@ impl Database {
         body: &str,
         context: &crate::domain::ExecutionContext,
     ) -> AuditedResult<crate::domain::Comment> {
+        let idempotency = match self.take_idempotency("issue_comment") {
+            Ok(idempotency) => idempotency,
+            Err(error) => {
+                return AuditedResult {
+                    result: Err(error),
+                    subject: AuditSubject::default(),
+                };
+            }
+        };
         let mut subject = AuditSubject::default();
         let result = (|| {
             let transaction = self
                 .connection
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .map_err(crate::error::AppError::from)?;
+            if let Some(comment) = Self::check_idempotency(&transaction, idempotency.as_ref())? {
+                return Ok(comment);
+            }
             let project_id = Self::project_id_in_transaction(&transaction, project_name)?;
             subject.project = Some((project_id, project_name.to_owned()));
             let issue = Self::issue_in_transaction(&transaction, project_id, number)?;
@@ -675,7 +1266,7 @@ impl Database {
                 &transaction,
                 AuditInsert {
                     operation: "issue_comment",
-                    idempotency_key: None,
+                    idempotency_key: idempotency.as_ref().map(|request| request.key.as_str()),
                     success: true,
                     context,
                     target: Some(("issue", &issue_id)),
@@ -687,6 +1278,7 @@ impl Database {
                     metadata_json: &audit_metadata,
                 },
             )?;
+            Self::remember_idempotency(&transaction, idempotency.as_ref(), &comment)?;
             transaction.commit().map_err(crate::error::AppError::from)?;
             Ok(comment)
         })();
@@ -768,10 +1360,14 @@ impl Database {
         background: &str,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::DecisionRequest, crate::error::AppError> {
+        let idempotency = self.take_idempotency("decision_request")?;
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(crate::error::AppError::from)?;
+        if let Some(request) = Self::check_idempotency(&transaction, idempotency.as_ref())? {
+            return Ok(request);
+        }
         let project_id = Self::project_id_in_transaction(&transaction, project_name)?;
         let issue = Self::issue_in_transaction(&transaction, project_id, number)?;
         if matches!(
@@ -866,7 +1462,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "decision_request",
-                idempotency_key: None,
+                idempotency_key: idempotency.as_ref().map(|request| request.key.as_str()),
                 success: true,
                 context,
                 target: Some(("issue", &issue_id)),
@@ -878,9 +1474,7 @@ impl Database {
                 metadata_json: &audit_metadata,
             },
         )?;
-        transaction.commit().map_err(crate::error::AppError::from)?;
-
-        Ok(crate::domain::DecisionRequest {
+        let request = crate::domain::DecisionRequest {
             id: request_id,
             issue: format!("{project_name}#{}", issue.number),
             question: question.to_owned(),
@@ -895,7 +1489,10 @@ impl Database {
             resolver_session_id: None,
             created_at: now,
             resolved_at: None,
-        })
+        };
+        Self::remember_idempotency(&transaction, idempotency.as_ref(), &request)?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(request)
     }
 
     pub fn resolve_decision(
@@ -905,10 +1502,14 @@ impl Database {
         resolution_input: crate::domain::DecisionResolutionInput,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::DecisionRequest, crate::error::AppError> {
+        let idempotency = self.take_idempotency("decision_resolve")?;
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(crate::error::AppError::from)?;
+        if let Some(request) = Self::check_idempotency(&transaction, idempotency.as_ref())? {
+            return Ok(request);
+        }
         let mut request = transaction
             .query_row(
                 "SELECT request.id, project.name, issue.number, request.question,
@@ -1053,7 +1654,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "decision_resolve",
-                idempotency_key: None,
+                idempotency_key: idempotency.as_ref().map(|request| request.key.as_str()),
                 success: true,
                 context,
                 target: Some(("issue", &issue_id_string)),
@@ -1071,6 +1672,7 @@ impl Database {
         request.resolver_name = context.initiator_name().map(str::to_owned);
         request.resolver_session_id = context.session_id.clone();
         request.resolved_at = Some(now);
+        Self::remember_idempotency(&transaction, idempotency.as_ref(), &request)?;
         transaction.commit().map_err(crate::error::AppError::from)?;
         Ok(request)
     }
@@ -1081,10 +1683,14 @@ impl Database {
         blocked: &crate::domain::IssueReference,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::IssueDependency, crate::error::AppError> {
+        let idempotency = self.take_idempotency("issue_dependency_add")?;
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(crate::error::AppError::from)?;
+        if let Some(relation) = Self::check_idempotency(&transaction, idempotency.as_ref())? {
+            return Ok(relation);
+        }
         let blocker_issue = Self::issue_reference_in_transaction(&transaction, blocker)?;
         let blocked_issue = Self::issue_reference_in_transaction(&transaction, blocked)?;
         if blocker_issue.id == blocked_issue.id {
@@ -1172,7 +1778,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "issue_dependency_add",
-                idempotency_key: None,
+                idempotency_key: idempotency.as_ref().map(|request| request.key.as_str()),
                 success: true,
                 context,
                 target: Some(("issue", &blocked_id)),
@@ -1184,13 +1790,15 @@ impl Database {
                 metadata_json: "{}",
             },
         )?;
-        transaction.commit().map_err(crate::error::AppError::from)?;
-        Ok(crate::domain::IssueDependency {
+        let relation = crate::domain::IssueDependency {
             blocker: blocker.label(),
             blocked: blocked.label(),
-            relation: "blocks",
+            relation: "blocks".to_owned(),
             created_at,
-        })
+        };
+        Self::remember_idempotency(&transaction, idempotency.as_ref(), &relation)?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(relation)
     }
 
     pub fn remove_dependency(
@@ -1199,10 +1807,14 @@ impl Database {
         blocked: &crate::domain::IssueReference,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::IssueDependency, crate::error::AppError> {
+        let idempotency = self.take_idempotency("issue_dependency_remove")?;
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(crate::error::AppError::from)?;
+        if let Some(relation) = Self::check_idempotency(&transaction, idempotency.as_ref())? {
+            return Ok(relation);
+        }
         let blocker_issue = Self::issue_reference_in_transaction(&transaction, blocker)?;
         let blocked_issue = Self::issue_reference_in_transaction(&transaction, blocked)?;
         let created_at_text = transaction
@@ -1256,7 +1868,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "issue_dependency_remove",
-                idempotency_key: None,
+                idempotency_key: idempotency.as_ref().map(|request| request.key.as_str()),
                 success: true,
                 context,
                 target: Some(("issue", &blocked_id)),
@@ -1268,13 +1880,15 @@ impl Database {
                 metadata_json: "{}",
             },
         )?;
-        transaction.commit().map_err(crate::error::AppError::from)?;
-        Ok(crate::domain::IssueDependency {
+        let relation = crate::domain::IssueDependency {
             blocker: blocker.label(),
             blocked: blocked.label(),
-            relation: "blocks",
+            relation: "blocks".to_owned(),
             created_at,
-        })
+        };
+        Self::remember_idempotency(&transaction, idempotency.as_ref(), &relation)?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(relation)
     }
 
     pub fn list_dependencies(
@@ -1312,10 +1926,14 @@ impl Database {
         parent: &crate::domain::IssueReference,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::IssueParent, crate::error::AppError> {
+        let idempotency = self.take_idempotency("issue_parent_set")?;
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(crate::error::AppError::from)?;
+        if let Some(parent) = Self::check_idempotency(&transaction, idempotency.as_ref())? {
+            return Ok(parent);
+        }
         let child_issue = Self::issue_reference_in_transaction(&transaction, child)?;
         let parent_issue = Self::issue_reference_in_transaction(&transaction, parent)?;
         if child_issue.id == parent_issue.id {
@@ -1397,7 +2015,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "issue_parent_set",
-                idempotency_key: None,
+                idempotency_key: idempotency.as_ref().map(|request| request.key.as_str()),
                 success: true,
                 context,
                 target: Some(("issue", &child_id)),
@@ -1409,12 +2027,14 @@ impl Database {
                 metadata_json: "{}",
             },
         )?;
-        transaction.commit().map_err(crate::error::AppError::from)?;
-        Ok(crate::domain::IssueParent {
+        let relation = crate::domain::IssueParent {
             child: child.label(),
             parent: parent.label(),
             created_at,
-        })
+        };
+        Self::remember_idempotency(&transaction, idempotency.as_ref(), &relation)?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(relation)
     }
 
     pub fn list_parent(
@@ -1451,6 +2071,7 @@ impl Database {
         number: Option<i64>,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::ClaimedIssue, crate::error::AppError> {
+        let idempotency = self.take_idempotency("issue_claim")?;
         let (agent, session_id) = Self::agent_session(context)?;
         if number.is_some_and(|number| number < 1) {
             return Err(crate::error::AppError::InvalidInput(
@@ -1461,6 +2082,9 @@ impl Database {
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(crate::error::AppError::from)?;
+        if let Some(claimed) = Self::check_idempotency(&transaction, idempotency.as_ref())? {
+            return Ok(claimed);
+        }
         let issue = match number {
             Some(number) => {
                 let project = project.ok_or_else(|| {
@@ -1604,7 +2228,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "issue_claim",
-                idempotency_key: None,
+                idempotency_key: idempotency.as_ref().map(|request| request.key.as_str()),
                 success: true,
                 context,
                 target: Some(("issue", &issue_id)),
@@ -1625,11 +2249,13 @@ impl Database {
             lease_revision: 1,
             stale: false,
         };
-        transaction.commit().map_err(crate::error::AppError::from)?;
-        Ok(crate::domain::ClaimedIssue {
+        let claimed = crate::domain::ClaimedIssue {
             issue: updated_issue,
             lease,
-        })
+        };
+        Self::remember_idempotency(&transaction, idempotency.as_ref(), &claimed)?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(claimed)
     }
 
     pub fn heartbeat_issue(
@@ -1637,11 +2263,15 @@ impl Database {
         issue: &crate::domain::Issue,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::ClaimedIssue, crate::error::AppError> {
+        let idempotency = self.take_idempotency("issue_heartbeat")?;
         let (agent, session_id) = Self::agent_session(context)?;
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(crate::error::AppError::from)?;
+        if let Some(claimed) = Self::check_idempotency(&transaction, idempotency.as_ref())? {
+            return Ok(claimed);
+        }
         let current = Self::lease_in_transaction(&transaction, issue.id)?;
         if current.agent != agent || current.session_id != session_id {
             return Err(crate::error::AppError::Conflict(
@@ -1682,7 +2312,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "issue_heartbeat",
-                idempotency_key: None,
+                idempotency_key: idempotency.as_ref().map(|request| request.key.as_str()),
                 success: true,
                 context,
                 target: Some(("issue", &issue_id)),
@@ -1694,8 +2324,10 @@ impl Database {
                 metadata_json: &audit_metadata,
             },
         )?;
+        let claimed = crate::domain::ClaimedIssue { issue, lease };
+        Self::remember_idempotency(&transaction, idempotency.as_ref(), &claimed)?;
         transaction.commit().map_err(crate::error::AppError::from)?;
-        Ok(crate::domain::ClaimedIssue { issue, lease })
+        Ok(claimed)
     }
 
     pub fn takeover_issue(
@@ -1704,6 +2336,7 @@ impl Database {
         reason: &str,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::ClaimedIssue, crate::error::AppError> {
+        let idempotency = self.take_idempotency("issue_takeover")?;
         let (agent, session_id) = Self::agent_session(context)?;
         if reason.trim().is_empty() {
             return Err(crate::error::AppError::InvalidInput(
@@ -1714,6 +2347,9 @@ impl Database {
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(crate::error::AppError::from)?;
+        if let Some(claimed) = Self::check_idempotency(&transaction, idempotency.as_ref())? {
+            return Ok(claimed);
+        }
         let current = Self::lease_in_transaction(&transaction, issue.id)?;
         let now = chrono::Utc::now();
         if current.expires_at > now {
@@ -1794,7 +2430,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "issue_takeover",
-                idempotency_key: None,
+                idempotency_key: idempotency.as_ref().map(|request| request.key.as_str()),
                 success: true,
                 context,
                 target: Some(("issue", &issue_id)),
@@ -1807,11 +2443,13 @@ impl Database {
             },
         )?;
         let lease = Self::lease_in_transaction(&transaction, updated_issue.id)?;
-        transaction.commit().map_err(crate::error::AppError::from)?;
-        Ok(crate::domain::ClaimedIssue {
+        let claimed = crate::domain::ClaimedIssue {
             issue: updated_issue,
             lease,
-        })
+        };
+        Self::remember_idempotency(&transaction, idempotency.as_ref(), &claimed)?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(claimed)
     }
 
     pub fn list_issues(
@@ -2075,7 +2713,7 @@ impl Database {
                     COALESCE(finished_at, occurred_at), operation, success,
                     COALESCE(exit_code, CASE WHEN success = 1 THEN 0 ELSE 10 END),
                     initiator_kind, initiator_name, session_id, project_id, project_name,
-                    target_type, target_id, revision, changed_fields_json
+                    target_type, target_id, revision, idempotency_key, changed_fields_json
              FROM audit_events WHERE 1 = 1",
         );
         let mut parameters = Vec::<rusqlite::types::Value>::new();
@@ -2202,6 +2840,48 @@ impl Database {
             })
     }
 
+    pub(crate) fn lookup_idempotency<T>(
+        &self,
+        request: Option<&IdempotencyRequest>,
+    ) -> Result<Option<T>, crate::error::AppError>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let Some(request) = request else {
+            return Ok(None);
+        };
+        use rusqlite::OptionalExtension as _;
+        let record = self
+            .connection
+            .query_row(
+                "SELECT operation, request_hash, response_json
+                 FROM idempotency_records WHERE idempotency_key = ?1",
+                [&request.key],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(crate::error::AppError::from)?;
+        let Some((operation, request_hash, response_json)) = record else {
+            return Ok(None);
+        };
+        if operation != request.operation || request_hash != request.request_hash {
+            return Err(crate::error::AppError::IdempotencyConflict);
+        }
+        serde_json::from_str(&response_json)
+            .map(Some)
+            .map_err(|error| {
+                crate::error::AppError::Internal(format!(
+                    "stored idempotency response is invalid: {error}"
+                ))
+            })
+    }
+
     fn remember_idempotency<T>(
         transaction: &rusqlite::Transaction<'_>,
         request: Option<&IdempotencyRequest>,
@@ -2240,6 +2920,20 @@ impl Database {
         subject: &AuditSubject,
         started_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), crate::error::AppError> {
+        self.record_failed_operation_with_idempotency(
+            operation, context, error, subject, started_at, None,
+        )
+    }
+
+    pub(crate) fn record_failed_operation_with_idempotency(
+        &mut self,
+        operation: &str,
+        context: &crate::domain::ExecutionContext,
+        error: &crate::error::AppError,
+        subject: &AuditSubject,
+        started_at: chrono::DateTime<chrono::Utc>,
+        idempotency_key: Option<&str>,
+    ) -> Result<(), crate::error::AppError> {
         // A failure audit uses the same writer lock, so it cannot be persisted while
         // the original operation is reporting that lock as busy. Preserve the
         // actionable busy error instead of waiting again and replacing it.
@@ -2255,7 +2949,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation,
-                idempotency_key: None,
+                idempotency_key,
                 success: false,
                 context,
                 target: subject
@@ -2417,7 +3111,8 @@ impl Database {
         let exit_code = u8::try_from(exit_code).map_err(|error| {
             crate::error::AppError::Internal(format!("invalid audit exit code: {error}"))
         })?;
-        let changed_fields = Self::audit_changed_fields_from_row(&operation, row, 14)?;
+        let idempotency_key: Option<String> = row.get(14).map_err(crate::error::AppError::from)?;
+        let changed_fields = Self::audit_changed_fields_from_row(&operation, row, 15)?;
         Ok(crate::app::AuditEvent {
             id: parse_uuid(row.get(0).map_err(crate::error::AppError::from)?)?,
             started_at: parse_timestamp(row.get(1).map_err(crate::error::AppError::from)?)?,
@@ -2429,6 +3124,7 @@ impl Database {
             outcome: if success == 1 { "success" } else { "failure" }.to_owned(),
             exit_code,
             revision,
+            idempotency_key,
             changed_fields,
         })
     }
@@ -2440,6 +3136,7 @@ impl Database {
                 | "issue_create"
                 | "issue_show"
                 | "issue_list"
+                | "issue_batch"
                 | "issue_edit"
                 | "issue_comment"
                 | "issue_history"
@@ -2591,10 +3288,14 @@ impl Database {
         input: &crate::domain::NewIssue,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::Issue, crate::error::AppError> {
+        let idempotency = self.take_idempotency("issue_create")?;
         let transaction = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(crate::error::AppError::from)?;
+        if let Some(issue) = Self::check_idempotency(&transaction, idempotency.as_ref())? {
+            return Ok(issue);
+        }
         let project_id = Self::project_id_in_transaction(&transaction, project_name)?;
         let number = transaction
             .query_row(
@@ -2664,7 +3365,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "issue_create",
-                idempotency_key: None,
+                idempotency_key: idempotency.as_ref().map(|request| request.key.as_str()),
                 success: true,
                 context,
                 target: Some(("issue", &issue_id)),
@@ -2676,6 +3377,7 @@ impl Database {
                 metadata_json: "{}",
             },
         )?;
+        Self::remember_idempotency(&transaction, idempotency.as_ref(), &issue)?;
         transaction.commit().map_err(crate::error::AppError::from)?;
         Ok(issue)
     }
@@ -2942,7 +3644,7 @@ impl Database {
         Ok(crate::domain::IssueDependency {
             blocker: format!("{blocker_project}#{blocker_number}"),
             blocked: format!("{blocked_project}#{blocked_number}"),
-            relation: "blocks",
+            relation: "blocks".to_owned(),
             created_at: Self::parse_timestamp(&created_at)?,
         })
     }
@@ -3211,7 +3913,10 @@ impl Database {
             .execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
             .map_err(crate::error::AppError::from)?;
 
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            pending_idempotency: None,
+        })
     }
 
     fn is_initialized_database(path: &std::path::Path) -> Result<bool, crate::error::AppError> {
@@ -3240,6 +3945,7 @@ impl Database {
         &mut self,
         context: &crate::domain::ExecutionContext,
         started_at: chrono::DateTime<chrono::Utc>,
+        idempotency: Option<&IdempotencyRequest>,
     ) -> Result<(), crate::error::AppError> {
         let transaction = self
             .connection
@@ -3256,6 +3962,7 @@ impl Database {
             ),
             (2, "schema_migrations"),
             (3, "phase_two_coordination"),
+            (4, "idempotency_and_audit"),
         ] {
             transaction
                 .execute(
@@ -3269,7 +3976,7 @@ impl Database {
             &transaction,
             AuditInsert {
                 operation: "init",
-                idempotency_key: None,
+                idempotency_key: idempotency.as_ref().map(|request| request.key.as_str()),
                 success: true,
                 context,
                 target: None,
@@ -3281,6 +3988,8 @@ impl Database {
                 metadata_json: "{}",
             },
         )?;
+        let result = serde_json::json!({ "initialized": true });
+        Self::remember_idempotency(&transaction, idempotency, &result)?;
         transaction.commit().map_err(crate::error::AppError::from)
     }
 

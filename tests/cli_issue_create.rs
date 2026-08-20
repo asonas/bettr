@@ -70,6 +70,62 @@ fn issue_create_returns_a_project_local_issue_in_the_json_envelope() {
 }
 
 #[test]
+fn issue_create_replays_without_allocating_another_issue() {
+    let app = crate::support::TestApp::new();
+    app.command().arg("init").assert().success();
+    app.command()
+        .args(["project", "create", "bettr"])
+        .assert()
+        .success();
+
+    let arguments = [
+        "issue",
+        "create",
+        "--project",
+        "bettr",
+        "--title",
+        "Build local core",
+        "--idempotency-key",
+        "issue-create-1",
+        "--json",
+    ];
+    let first = app.command().args(arguments).output().unwrap();
+    let second = app.command().args(arguments).output().unwrap();
+    assert!(first.status.success());
+    assert!(second.status.success());
+    assert_eq!(first.stdout, second.stdout);
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM issues", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM domain_events WHERE event_type = 'issue_created'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM audit_events WHERE operation = 'issue_create' AND success = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
 fn issue_create_allocates_numbers_per_project() {
     let app = crate::support::TestApp::new();
     app.command().arg("init").assert().success();

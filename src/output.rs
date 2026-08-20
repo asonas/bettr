@@ -82,6 +82,16 @@ pub fn write_issue_created_human(project: &str, issue: &crate::domain::Issue) {
     );
 }
 
+pub fn write_batch_human(results: &[crate::domain::BatchResult]) {
+    for result in results {
+        println!(
+            "{} {}",
+            result.operation,
+            escape_terminal_controls(&result.result.to_string())
+        );
+    }
+}
+
 pub fn write_issue_human(project: &str, issue: &crate::domain::Issue) {
     println!("{}#{}", escape_terminal_controls(project), issue.number);
     println!("state: {}", issue.state.as_str());

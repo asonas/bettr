@@ -116,6 +116,8 @@ fn project_create_replays_the_same_result_for_an_idempotency_key() {
 
     let first = app
         .command()
+        .env("BETTR_AGENT", "first-agent")
+        .env("BETTR_SESSION_ID", "first-session")
         .args([
             "project",
             "create",
@@ -130,6 +132,8 @@ fn project_create_replays_the_same_result_for_an_idempotency_key() {
 
     let second = app
         .command()
+        .env("BETTR_AGENT", "second-agent")
+        .env("BETTR_SESSION_ID", "second-session")
         .args([
             "project",
             "create",
@@ -221,6 +225,18 @@ fn project_create_rejects_reusing_an_idempotency_key_for_a_different_payload() {
             )
             .unwrap(),
         1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT idempotency_key FROM audit_events
+                 WHERE operation = 'project_create' AND success = 0",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .unwrap()
+            .as_deref(),
+        Some("project-create-1")
     );
 }
 

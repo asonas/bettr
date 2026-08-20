@@ -77,6 +77,22 @@ Persist the cursor only after the page has been processed successfully. Consumer
 
 `capabilities --json` returns the JSON contract version, CLI version, and a boolean capability map. The checked-in source of truth is [`contracts/capabilities.json`](../contracts/capabilities.json). Consumers must invoke only capabilities whose value is `true`; `false` or unknown capabilities are unavailable.
 
+When the `idempotency` capability is `true`, mutating commands accept the
+optional global `--idempotency-key KEY`. A successful result is stored with
+the operation and canonical request payload. Retrying the same operation and
+payload returns the stored result without another domain or success-audit
+event. Reusing a key with a different operation or payload returns
+`idempotency_conflict`; failed writes are not stored, and callers should keep
+the normal `revision_conflict` and `database_busy` retry behavior.
+
+`issue batch --input PATH --json` accepts a JSON array of Issue mutations. The
+supported operation tags are `issue_create`, `issue_edit`, `issue_comment`,
+`issue_start`, `issue_block`, `issue_resume`, `issue_complete`,
+`issue_cancel`, and `issue_reopen`. `--input -` reads stdin. The complete
+array runs in one transaction and either commits all operations or rolls all
+of them back. A batch idempotency key replays the complete ordered result
+array.
+
 ## Error envelope
 
 Failed commands return a nonzero exit code and write:
@@ -94,7 +110,7 @@ Failed commands return a nonzero exit code and write:
 }
 ```
 
-`error.code` is the stable machine-readable identifier. `error.message` is intended for diagnostics and must not be parsed. `error.details` is present only when the error supplies structured details; Phase 1 revision conflicts include `current_revision`.
+`error.code` is the stable machine-readable identifier. `error.message` is intended for diagnostics and must not be parsed. `error.details` is present only when the error supplies structured details; Phase 1 revision conflicts include `current_revision`. Idempotency key collisions use `idempotency_conflict` and do not include request-specific details.
 
 ## Timestamps
 
@@ -123,7 +139,7 @@ JSON Issue objects also include the immutable Issue UUID in `id`, the immutable 
 | 0 | Success | none |
 | 2 | Invalid input, command usage, or unsupported database schema | `invalid_input`, `unsupported_database_schema_version` |
 | 3 | Project, Issue, or initialized database not found | `not_found`, `database_not_initialized` |
-| 4 | State, name, or revision conflict | `invalid_transition`, `project_name_conflict`, `revision_conflict` |
+| 4 | State, name, revision, or idempotency conflict | `invalid_transition`, `project_name_conflict`, `revision_conflict`, `idempotency_conflict` |
 | 5 | SQLite remained busy beyond the configured wait | `database_busy` |
 | 10 | Internal failure | `internal_error` |
 
@@ -141,17 +157,17 @@ When a command that requires an initialized database selects an existing SQLite 
 
 For normal local use, bettr verifies that the selected path resolves to a regular file and checks its header without opening SQLite, then rechecks the identity on the opened connection before enabling connection settings. A known older bettr database schema is migrated in a single transaction before the command continues. This protects an unrelated SQLite database from accidental path selection without changing its existing bytes or creating SQLite sidecars during the header preflight.
 
-The SQLite database schema version is independent from the JSON response `schema_version`. The current database schema version is 3; versions 1 and 2 are migrated automatically and their applied versions are recorded in `schema_migrations`. A bettr database with an unknown schema version is rejected before SQLite is opened for writing and exits 2:
+The SQLite database schema version is independent from the JSON response `schema_version`. The current database schema version is 4; versions 1, 2, and 3 are migrated automatically and their applied versions are recorded in `schema_migrations`. A bettr database with an unknown schema version is rejected before SQLite is opened for writing and exits 2:
 
 ```json
 {
   "schema_version": 1,
   "error": {
     "code": "unsupported_database_schema_version",
-    "message": "database schema version 99 is unsupported; current version is 3",
+    "message": "database schema version 99 is unsupported; current version is 4",
     "details": {
       "found_version": 99,
-      "current_version": 3
+      "current_version": 4
     }
   }
 }

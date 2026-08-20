@@ -142,19 +142,36 @@ fn migrate_to_phase_two_coordination(
 
 fn migrate_to_idempotency(transaction: &rusqlite::Transaction<'_>) -> Result<(), rusqlite::Error> {
     transaction.execute_batch(
-        "CREATE TABLE idempotency_records (
+        "CREATE TABLE IF NOT EXISTS idempotency_records (
              idempotency_key TEXT PRIMARY KEY,
              operation TEXT NOT NULL,
              request_hash TEXT NOT NULL,
              response_json TEXT NOT NULL,
              created_at TEXT NOT NULL
          );
-         CREATE INDEX idempotency_records_created_at
-             ON idempotency_records(created_at);
-         ALTER TABLE audit_events ADD COLUMN idempotency_key TEXT;
-         CREATE INDEX audit_events_idempotency_key
-             ON audit_events(idempotency_key);",
-    )
+         CREATE INDEX IF NOT EXISTS idempotency_records_created_at
+             ON idempotency_records(created_at);",
+    )?;
+    let has_audit_idempotency_key: bool = transaction.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM pragma_table_info('audit_events')
+             WHERE name = 'idempotency_key'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_audit_idempotency_key {
+        transaction.execute(
+            "ALTER TABLE audit_events ADD COLUMN idempotency_key TEXT",
+            [],
+        )?;
+    }
+    transaction.execute(
+        "CREATE INDEX IF NOT EXISTS audit_events_idempotency_key
+         ON audit_events(idempotency_key)",
+        [],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]

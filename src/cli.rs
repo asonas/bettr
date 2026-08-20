@@ -46,6 +46,9 @@ impl AuditInvocation {
                         .and_then(|value| value.to_str())
                         .map(str::to_owned);
                 }
+                "--idempotency-key" => {
+                    index += 1;
+                }
                 _ if argument.starts_with("--database=") => {
                     database = argument
                         .strip_prefix("--database=")
@@ -68,6 +71,7 @@ impl AuditInvocation {
             ("project", Some("list")) => "project_list",
             ("project", _) => "project",
             ("issue", Some("create")) => "issue_create",
+            ("issue", Some("batch")) => "issue_batch",
             ("issue", Some("show")) => "issue_show",
             ("issue", Some("list")) => "issue_list",
             ("issue", Some("edit")) => "issue_edit",
@@ -147,6 +151,7 @@ pub struct IssueCommand {
 #[derive(clap::Subcommand, Debug)]
 pub enum IssueSubcommand {
     Create(IssueCreateCommand),
+    Batch(IssueBatchCommand),
     Show(IssueShowCommand),
     List(IssueListCommand),
     Edit(IssueEditCommand),
@@ -163,6 +168,12 @@ pub enum IssueSubcommand {
     Complete(IssueCompleteCommand),
     Cancel(IssueCancelCommand),
     Reopen(IssueReopenCommand),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueBatchCommand {
+    #[arg(long, value_name = "PATH")]
+    pub input: std::path::PathBuf,
 }
 
 #[derive(clap::Args, Debug)]

@@ -21,8 +21,8 @@ fn codex_and_claude_skills_use_only_declared_phase_two_contracts() {
             "skill files must mention declared capability {capability}"
         );
     }
-    assert!(!combined.contains("idempotency key"));
-    assert!(!combined.contains("bettr batch"));
+    assert!(combined.contains("idempotency-key"));
+    assert!(combined.contains("bettr issue batch"));
     for command in [
         "bettr capabilities --json",
         "bettr issue claim",

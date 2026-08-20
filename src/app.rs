@@ -68,6 +68,7 @@ pub struct AuditEvent {
     pub outcome: String,
     pub exit_code: u8,
     pub revision: Option<i64>,
+    pub idempotency_key: Option<String>,
     pub changed_fields: Vec<String>,
 }
 
@@ -111,23 +112,37 @@ impl App {
     fn idempotency_request(
         &self,
         operation: &str,
-        mut payload: serde_json::Value,
-        context: &crate::domain::ExecutionContext,
+        payload: serde_json::Value,
+        _context: &crate::domain::ExecutionContext,
     ) -> Result<Option<crate::store::IdempotencyRequest>, crate::error::AppError> {
         let Some(key) = self.idempotency_key.as_deref() else {
             return Ok(None);
         };
-        let object = payload.as_object_mut().ok_or_else(|| {
-            crate::error::AppError::Internal(
-                "idempotency request payload must be a JSON object".to_owned(),
-            )
-        })?;
-        object.insert(
-            "context".to_owned(),
-            serde_json::to_value(context)
-                .map_err(|error| crate::error::AppError::Internal(error.to_string()))?,
-        );
         crate::store::IdempotencyRequest::new(key, operation, payload).map(Some)
+    }
+
+    fn replay_idempotency<T>(
+        &mut self,
+        operation: &str,
+        request: Option<&crate::store::IdempotencyRequest>,
+        project: Option<&str>,
+        context: &crate::domain::ExecutionContext,
+        started_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<T>, crate::error::AppError>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        match self.database.lookup_idempotency(request) {
+            Ok(result) => Ok(result),
+            Err(error) => Err(self.audited_cli_failure_with_idempotency(
+                operation,
+                project,
+                context,
+                error,
+                started_at,
+                request.map(|request| request.key.as_str()),
+            )),
+        }
     }
 
     pub fn audited_cli_failure(
@@ -138,13 +153,31 @@ impl App {
         error: crate::error::AppError,
         started_at: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::AppError {
+        self.audited_cli_failure_with_idempotency(
+            operation, project, context, error, started_at, None,
+        )
+    }
+
+    fn audited_cli_failure_with_idempotency(
+        &mut self,
+        operation: &str,
+        project: Option<&str>,
+        context: &crate::domain::ExecutionContext,
+        error: crate::error::AppError,
+        started_at: chrono::DateTime<chrono::Utc>,
+        idempotency_key: Option<&str>,
+    ) -> crate::error::AppError {
         let subject = project
             .map(|project| self.database.project_audit_subject(project))
             .unwrap_or_default();
-        match self
-            .database
-            .record_failed_operation(operation, context, &error, &subject, started_at)
-        {
+        match self.database.record_failed_operation_with_idempotency(
+            operation,
+            context,
+            &error,
+            &subject,
+            started_at,
+            idempotency_key,
+        ) {
             Ok(()) => error,
             Err(audit_error) => Self::failure_audit_error(operation, &error, &audit_error),
         }
@@ -325,17 +358,19 @@ impl App {
             context,
         )?;
         match crate::domain::validate_project_name(name).and_then(|()| {
-            self.database
-                .create_project_with_idempotency(name, context, idempotency.as_ref())
+            self.database.with_idempotency(idempotency, |database| {
+                database.create_project(name, context)
+            })
         }) {
             Ok(project) => Ok(project),
             Err(error) => {
-                if let Err(audit_error) = self.database.record_failed_operation(
+                if let Err(audit_error) = self.database.record_failed_operation_with_idempotency(
                     "project_create",
                     context,
                     &error,
                     &subject,
                     started_at,
+                    self.idempotency_key.as_deref(),
                 ) {
                     return Err(Self::failure_audit_error(
                         "project_create",
@@ -389,21 +424,111 @@ impl App {
     ) -> Result<crate::domain::Issue, crate::error::AppError> {
         let started_at = chrono::Utc::now();
         let subject = self.database.project_audit_subject(project);
-        match input
-            .validate()
-            .and_then(|()| self.database.create_issue(project, &input, context))
-        {
+        let idempotency = self.idempotency_request(
+            "issue_create",
+            serde_json::json!({ "project": project, "input": input }),
+            context,
+        )?;
+        match input.validate().and_then(|()| {
+            self.database.with_idempotency(idempotency, |database| {
+                database.create_issue(project, &input, context)
+            })
+        }) {
             Ok(issue) => Ok(issue),
             Err(error) => {
-                if let Err(audit_error) = self.database.record_failed_operation(
+                if let Err(audit_error) = self.database.record_failed_operation_with_idempotency(
                     "issue_create",
                     context,
                     &error,
                     &subject,
                     started_at,
+                    self.idempotency_key.as_deref(),
                 ) {
                     return Err(Self::failure_audit_error(
                         "issue_create",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn batch_issues(
+        &mut self,
+        input_path: &std::path::Path,
+        default_project: Option<&str>,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<Vec<crate::domain::BatchResult>, crate::error::AppError> {
+        let started_at = chrono::Utc::now();
+        let result = (|| {
+            let input = if input_path == std::path::Path::new("-") {
+                use std::io::Read as _;
+                let mut input = String::new();
+                std::io::stdin()
+                    .read_to_string(&mut input)
+                    .map_err(|error| {
+                        crate::error::AppError::InvalidInput(format!(
+                            "could not read issue batch input: {error}"
+                        ))
+                    })?;
+                input
+            } else {
+                std::fs::read_to_string(input_path).map_err(|error| {
+                    crate::error::AppError::InvalidInput(format!(
+                        "could not read issue batch input: {error}"
+                    ))
+                })?
+            };
+            let operations = serde_json::from_str::<Vec<crate::domain::BatchOperation>>(&input)
+                .map_err(|error| {
+                    crate::error::AppError::InvalidInput(format!(
+                        "issue batch input must be a JSON array: {error}"
+                    ))
+                })?;
+            if operations.is_empty() {
+                return Err(crate::error::AppError::InvalidInput(
+                    "issue batch input must contain at least one operation".to_owned(),
+                ));
+            }
+            let idempotency = self.idempotency_request(
+                "issue_batch",
+                serde_json::json!({
+                    "project": default_project,
+                    "operations": operations,
+                }),
+                context,
+            )?;
+            if let Some(results) = self.replay_idempotency(
+                "issue_batch",
+                idempotency.as_ref(),
+                default_project,
+                context,
+                started_at,
+            )? {
+                return Ok(results);
+            }
+            self.database.with_idempotency(idempotency, |database| {
+                database.batch_issues(&operations, default_project, context)
+            })
+        })();
+        match result {
+            Ok(results) => Ok(results),
+            Err(error) => {
+                let subject = default_project
+                    .map(|project| self.database.project_audit_subject(project))
+                    .unwrap_or_default();
+                if let Err(audit_error) = self.database.record_failed_operation_with_idempotency(
+                    "issue_batch",
+                    context,
+                    &error,
+                    &subject,
+                    started_at,
+                    self.idempotency_key.as_deref(),
+                ) {
+                    return Err(Self::failure_audit_error(
+                        "issue_batch",
                         &error,
                         &audit_error,
                     ));
@@ -476,6 +601,25 @@ impl App {
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::Issue, crate::error::AppError> {
         let started_at = chrono::Utc::now();
+        let idempotency = self.idempotency_request(
+            "issue_edit",
+            serde_json::json!({
+                "project": project,
+                "number": number,
+                "revision": expected_revision,
+                "patch": patch,
+            }),
+            context,
+        )?;
+        if let Some(issue) = self.replay_idempotency(
+            "issue_edit",
+            idempotency.as_ref(),
+            Some(project),
+            context,
+            started_at,
+        )? {
+            return Ok(issue);
+        }
         let crate::store::AuditedResult {
             result: issue_result,
             subject,
@@ -499,19 +643,21 @@ impl App {
                     current_revision: issue.revision,
                 });
             }
-            self.database
-                .update_issue(&issue, expected_revision, &patch, context)
+            self.database.with_idempotency(idempotency, |database| {
+                database.update_issue(&issue, expected_revision, &patch, context)
+            })
         })();
 
         match result {
             Ok(issue) => Ok(issue),
             Err(error) => {
-                if let Err(audit_error) = self.database.record_failed_operation(
+                if let Err(audit_error) = self.database.record_failed_operation_with_idempotency(
                     "issue_edit",
                     context,
                     &error,
                     &subject,
                     started_at,
+                    self.idempotency_key.as_deref(),
                 ) {
                     return Err(Self::failure_audit_error(
                         "issue_edit",
@@ -532,6 +678,15 @@ impl App {
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::Comment, crate::error::AppError> {
         let started_at = chrono::Utc::now();
+        let idempotency = self.idempotency_request(
+            "issue_comment",
+            serde_json::json!({
+                "project": project,
+                "number": number,
+                "body": body,
+            }),
+            context,
+        )?;
         let validation = (|| {
             if number < 1 {
                 return Err(crate::error::AppError::InvalidInput(
@@ -542,7 +697,9 @@ impl App {
             Ok(())
         })();
         let crate::store::AuditedResult { result, subject } = match validation {
-            Ok(()) => self.database.add_comment(project, number, body, context),
+            Ok(()) => self.database.with_idempotency(idempotency, |database| {
+                database.add_comment(project, number, body, context)
+            }),
             Err(error) => crate::store::AuditedResult {
                 result: Err(error),
                 subject: self.database.project_audit_subject(project),
@@ -552,12 +709,13 @@ impl App {
         match result {
             Ok(comment) => Ok(comment),
             Err(error) => {
-                if let Err(audit_error) = self.database.record_failed_operation(
+                if let Err(audit_error) = self.database.record_failed_operation_with_idempotency(
                     "issue_comment",
                     context,
                     &error,
                     &subject,
                     started_at,
+                    self.idempotency_key.as_deref(),
                 ) {
                     return Err(Self::failure_audit_error(
                         "issue_comment",
@@ -637,17 +795,28 @@ impl App {
         let result = (|| {
             let blocker = crate::domain::IssueReference::parse(blocker, default_project)?;
             let blocked = crate::domain::IssueReference::parse(blocked, default_project)?;
-            self.database.add_dependency(&blocker, &blocked, context)
+            let idempotency = self.idempotency_request(
+                "issue_dependency_add",
+                serde_json::json!({
+                    "blocker": blocker.label(),
+                    "blocked": blocked.label(),
+                }),
+                context,
+            )?;
+            self.database.with_idempotency(idempotency, |database| {
+                database.add_dependency(&blocker, &blocked, context)
+            })
         })();
         match result {
             Ok(relation) => Ok(relation),
             Err(error) => {
-                if let Err(audit_error) = self.database.record_failed_operation(
+                if let Err(audit_error) = self.database.record_failed_operation_with_idempotency(
                     "issue_dependency_add",
                     context,
                     &error,
                     &subject,
                     started_at,
+                    self.idempotency_key.as_deref(),
                 ) {
                     return Err(Self::failure_audit_error(
                         "issue_dependency_add",
@@ -674,17 +843,28 @@ impl App {
         let result = (|| {
             let blocker = crate::domain::IssueReference::parse(blocker, default_project)?;
             let blocked = crate::domain::IssueReference::parse(blocked, default_project)?;
-            self.database.remove_dependency(&blocker, &blocked, context)
+            let idempotency = self.idempotency_request(
+                "issue_dependency_remove",
+                serde_json::json!({
+                    "blocker": blocker.label(),
+                    "blocked": blocked.label(),
+                }),
+                context,
+            )?;
+            self.database.with_idempotency(idempotency, |database| {
+                database.remove_dependency(&blocker, &blocked, context)
+            })
         })();
         match result {
             Ok(relation) => Ok(relation),
             Err(error) => {
-                if let Err(audit_error) = self.database.record_failed_operation(
+                if let Err(audit_error) = self.database.record_failed_operation_with_idempotency(
                     "issue_dependency_remove",
                     context,
                     &error,
                     &subject,
                     started_at,
+                    self.idempotency_key.as_deref(),
                 ) {
                     return Err(Self::failure_audit_error(
                         "issue_dependency_remove",
@@ -755,17 +935,28 @@ impl App {
         let result = (|| {
             let child = crate::domain::IssueReference::parse(child, default_project)?;
             let parent = crate::domain::IssueReference::parse(parent, default_project)?;
-            self.database.set_parent(&child, &parent, context)
+            let idempotency = self.idempotency_request(
+                "issue_parent_set",
+                serde_json::json!({
+                    "child": child.label(),
+                    "parent": parent.label(),
+                }),
+                context,
+            )?;
+            self.database.with_idempotency(idempotency, |database| {
+                database.set_parent(&child, &parent, context)
+            })
         })();
         match result {
             Ok(relation) => Ok(relation),
             Err(error) => {
-                if let Err(audit_error) = self.database.record_failed_operation(
+                if let Err(audit_error) = self.database.record_failed_operation_with_idempotency(
                     "issue_parent_set",
                     context,
                     &error,
                     &subject,
                     started_at,
+                    self.idempotency_key.as_deref(),
                 ) {
                     return Err(Self::failure_audit_error(
                         "issue_parent_set",
@@ -832,15 +1023,23 @@ impl App {
         let subject = project
             .map(|project| self.database.project_audit_subject(project))
             .unwrap_or_default();
-        match self.database.claim_issue(project, number, context) {
+        let idempotency = self.idempotency_request(
+            "issue_claim",
+            serde_json::json!({ "project": project, "number": number }),
+            context,
+        )?;
+        match self.database.with_idempotency(idempotency, |database| {
+            database.claim_issue(project, number, context)
+        }) {
             Ok(claimed) => Ok(claimed),
             Err(error) => {
-                if let Err(audit_error) = self.database.record_failed_operation(
+                if let Err(audit_error) = self.database.record_failed_operation_with_idempotency(
                     "issue_claim",
                     context,
                     &error,
                     &subject,
                     started_at,
+                    self.idempotency_key.as_deref(),
                 ) {
                     return Err(Self::failure_audit_error(
                         "issue_claim",
@@ -863,6 +1062,16 @@ impl App {
     ) -> Result<crate::domain::DecisionRequest, crate::error::AppError> {
         let started_at = chrono::Utc::now();
         let subject = self.database.project_audit_subject(project);
+        let idempotency = self.idempotency_request(
+            "decision_request",
+            serde_json::json!({
+                "project": project,
+                "number": number,
+                "question": question,
+                "background": background,
+            }),
+            context,
+        )?;
         let result = (|| {
             if number < 1 {
                 return Err(crate::error::AppError::InvalidInput(
@@ -871,18 +1080,20 @@ impl App {
             }
             crate::domain::validate_decision_text("decision question", question)?;
             crate::domain::validate_decision_text("decision background", background)?;
-            self.database
-                .request_decision(project, number, question, background, context)
+            self.database.with_idempotency(idempotency, |database| {
+                database.request_decision(project, number, question, background, context)
+            })
         })();
         match result {
             Ok(request) => Ok(request),
             Err(error) => {
-                if let Err(audit_error) = self.database.record_failed_operation(
+                if let Err(audit_error) = self.database.record_failed_operation_with_idempotency(
                     "decision_request",
                     context,
                     &error,
                     &subject,
                     started_at,
+                    self.idempotency_key.as_deref(),
                 ) {
                     return Err(Self::failure_audit_error(
                         "decision_request",
@@ -903,6 +1114,15 @@ impl App {
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::DecisionRequest, crate::error::AppError> {
         let started_at = chrono::Utc::now();
+        let idempotency = self.idempotency_request(
+            "decision_resolve",
+            serde_json::json!({
+                "request_id": request_id,
+                "answer": answer,
+                "resolution": resolution,
+            }),
+            context,
+        )?;
         let result = (|| {
             let request_id = uuid::Uuid::parse_str(request_id).map_err(|_| {
                 crate::error::AppError::InvalidInput(
@@ -910,18 +1130,20 @@ impl App {
                 )
             })?;
             crate::domain::validate_decision_text("decision answer", answer)?;
-            self.database
-                .resolve_decision(request_id, answer, resolution, context)
+            self.database.with_idempotency(idempotency, |database| {
+                database.resolve_decision(request_id, answer, resolution, context)
+            })
         })();
         match result {
             Ok(request) => Ok(request),
             Err(error) => {
-                if let Err(audit_error) = self.database.record_failed_operation(
+                if let Err(audit_error) = self.database.record_failed_operation_with_idempotency(
                     "decision_resolve",
                     context,
                     &error,
                     &crate::store::AuditSubject::default(),
                     started_at,
+                    self.idempotency_key.as_deref(),
                 ) {
                     return Err(Self::failure_audit_error(
                         "decision_resolve",
@@ -941,6 +1163,20 @@ impl App {
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::ClaimedIssue, crate::error::AppError> {
         let started_at = chrono::Utc::now();
+        let idempotency = self.idempotency_request(
+            "issue_heartbeat",
+            serde_json::json!({ "project": project, "number": number }),
+            context,
+        )?;
+        if let Some(claimed) = self.replay_idempotency(
+            "issue_heartbeat",
+            idempotency.as_ref(),
+            Some(project),
+            context,
+            started_at,
+        )? {
+            return Ok(claimed);
+        }
         let crate::store::AuditedResult {
             result: issue_result,
             subject,
@@ -952,17 +1188,20 @@ impl App {
                 ));
             }
             let issue = issue_result?;
-            self.database.heartbeat_issue(&issue, context)
+            self.database.with_idempotency(idempotency, |database| {
+                database.heartbeat_issue(&issue, context)
+            })
         })();
         match result {
             Ok(claimed) => Ok(claimed),
             Err(error) => {
-                if let Err(audit_error) = self.database.record_failed_operation(
+                if let Err(audit_error) = self.database.record_failed_operation_with_idempotency(
                     "issue_heartbeat",
                     context,
                     &error,
                     &subject,
                     started_at,
+                    self.idempotency_key.as_deref(),
                 ) {
                     return Err(Self::failure_audit_error(
                         "issue_heartbeat",
@@ -983,6 +1222,24 @@ impl App {
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::ClaimedIssue, crate::error::AppError> {
         let started_at = chrono::Utc::now();
+        let idempotency = self.idempotency_request(
+            "issue_takeover",
+            serde_json::json!({
+                "project": project,
+                "number": number,
+                "reason": reason,
+            }),
+            context,
+        )?;
+        if let Some(claimed) = self.replay_idempotency(
+            "issue_takeover",
+            idempotency.as_ref(),
+            Some(project),
+            context,
+            started_at,
+        )? {
+            return Ok(claimed);
+        }
         let crate::store::AuditedResult {
             result: issue_result,
             subject,
@@ -994,17 +1251,20 @@ impl App {
                 ));
             }
             let issue = issue_result?;
-            self.database.takeover_issue(&issue, reason, context)
+            self.database.with_idempotency(idempotency, |database| {
+                database.takeover_issue(&issue, reason, context)
+            })
         })();
         match result {
             Ok(claimed) => Ok(claimed),
             Err(error) => {
-                if let Err(audit_error) = self.database.record_failed_operation(
+                if let Err(audit_error) = self.database.record_failed_operation_with_idempotency(
                     "issue_takeover",
                     context,
                     &error,
                     &subject,
                     started_at,
+                    self.idempotency_key.as_deref(),
                 ) {
                     return Err(Self::failure_audit_error(
                         "issue_takeover",
@@ -1027,6 +1287,29 @@ impl App {
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::Issue, crate::error::AppError> {
         let started_at = chrono::Utc::now();
+        let transition_payload = transition.as_ref().map_or_else(
+            |_| serde_json::Value::Null,
+            crate::domain::Transition::idempotency_payload,
+        );
+        let idempotency = self.idempotency_request(
+            operation,
+            serde_json::json!({
+                "project": project,
+                "number": number,
+                "revision": expected_revision,
+                "transition": transition_payload,
+            }),
+            context,
+        )?;
+        if let Some(issue) = self.replay_idempotency(
+            operation,
+            idempotency.as_ref(),
+            Some(project),
+            context,
+            started_at,
+        )? {
+            return Ok(issue);
+        }
         let crate::store::AuditedResult {
             result: issue_result,
             subject,
@@ -1051,22 +1334,28 @@ impl App {
                 });
             }
             let target_state = issue.state.apply(&transition)?;
-            self.database.transition_issue(
-                &issue,
-                expected_revision,
-                &transition,
-                target_state,
-                context,
-            )
+            self.database.with_idempotency(idempotency, |database| {
+                database.transition_issue(
+                    &issue,
+                    expected_revision,
+                    &transition,
+                    target_state,
+                    context,
+                )
+            })
         })();
 
         match result {
             Ok(issue) => Ok(issue),
             Err(error) => {
-                if let Err(audit_error) = self
-                    .database
-                    .record_failed_operation(operation, context, &error, &subject, started_at)
-                {
+                if let Err(audit_error) = self.database.record_failed_operation_with_idempotency(
+                    operation,
+                    context,
+                    &error,
+                    &subject,
+                    started_at,
+                    self.idempotency_key.as_deref(),
+                ) {
                     return Err(Self::failure_audit_error(operation, &error, &audit_error));
                 }
                 Err(error)
@@ -1256,7 +1545,7 @@ impl App {
                 ("human_decisions", true),
                 ("event_cursor", true),
                 ("capabilities", true),
-                ("idempotency", false),
+                ("idempotency", true),
             ]
             .into_iter()
             .collect(),

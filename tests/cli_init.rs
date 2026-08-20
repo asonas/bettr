@@ -45,7 +45,7 @@ fn assert_project_list_rejected_without_file_changes(
 }
 
 #[test]
-fn init_creates_a_version_three_database_with_migration_history() {
+fn init_creates_a_version_four_database_with_migration_history() {
     let app = crate::support::TestApp::new();
 
     app.command()
@@ -59,7 +59,7 @@ fn init_creates_a_version_three_database_with_migration_history() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        3
+        4
     );
     let migrations = connection
         .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
@@ -76,6 +76,7 @@ fn init_creates_a_version_three_database_with_migration_history() {
             (1, "phase1_baseline".to_owned()),
             (2, "schema_migrations".to_owned()),
             (3, "phase_two_coordination".to_owned()),
+            (4, "idempotency_and_audit".to_owned()),
         ]
     );
     assert_eq!(
@@ -115,6 +116,36 @@ fn init_creates_a_version_three_database_with_migration_history() {
 }
 
 #[test]
+fn init_replays_success_for_the_same_idempotency_key() {
+    let app = crate::support::TestApp::new();
+    let arguments = ["init", "--idempotency-key", "init-1", "--json"];
+    app.command().args(arguments).assert().success();
+    app.command().args(arguments).assert().success();
+
+    let connection = rusqlite::Connection::open(&app.database).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM audit_events WHERE operation = 'init' AND success = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM idempotency_records WHERE idempotency_key = 'init-1'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
 fn project_list_migrates_a_version_one_database_and_records_history() {
     let app = crate::support::TestApp::new();
 
@@ -143,7 +174,7 @@ fn project_list_migrates_a_version_one_database_and_records_history() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        3
+        4
     );
     assert_eq!(
         connection
@@ -170,6 +201,7 @@ fn project_list_migrates_a_version_one_database_and_records_history() {
             (1, "phase1_baseline".to_owned()),
             (2, "schema_migrations".to_owned()),
             (3, "phase_two_coordination".to_owned()),
+            (4, "idempotency_and_audit".to_owned()),
         ]
     );
     let audit_count: i64 = connection
@@ -180,7 +212,7 @@ fn project_list_migrates_a_version_one_database_and_records_history() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(audit_count, 2);
+    assert_eq!(audit_count, 3);
     let metadata: String = connection
         .query_row(
             "SELECT metadata_json FROM audit_events
@@ -193,9 +225,9 @@ fn project_list_migrates_a_version_one_database_and_records_history() {
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&metadata).unwrap(),
         serde_json::json!({
-            "from_version": 2,
-            "to_version": 3,
-            "migration": "phase_two_coordination",
+            "from_version": 3,
+            "to_version": 4,
+            "migration": "idempotency_and_audit",
         })
     );
 }
@@ -234,7 +266,7 @@ fn project_list_rejects_an_unknown_bettr_schema_version_without_changes() {
         "unsupported_database_schema_version"
     );
     assert_eq!(response["error"]["details"]["found_version"], 99);
-    assert_eq!(response["error"]["details"]["current_version"], 3);
+    assert_eq!(response["error"]["details"]["current_version"], 4);
     assert_eq!(std::fs::read(&app.database).unwrap(), expected_bytes);
     assert_eq!(
         directory_entries(app.dir.path()),

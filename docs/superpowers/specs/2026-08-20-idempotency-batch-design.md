@@ -124,4 +124,3 @@ Tests will cover:
 - successful and failing batches proving commit and rollback boundaries;
 - migration from schema version 3, capability JSON, JSON response shape,
   README/skill contract text, and the complete existing test suite.
-

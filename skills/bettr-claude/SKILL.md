@@ -20,7 +20,13 @@ bettr capabilities --json
 
 Verify `command -v bettr` and `bettr --help`. Read `.data.capabilities`, reject unsupported JSON contract versions, and invoke only capabilities marked `true`. Treat unknown capability names as unavailable; additive response fields may be ignored.
 
-The implemented capability names are `issue_dependencies`, `issue_parent`, `issue_claim`, `issue_lease`, `human_decisions`, `event_cursor`, and `capabilities`. Treat `idempotency` as unavailable. Stop when blocked instead of inventing a replacement command.
+The implemented capability names are `issue_dependencies`, `issue_parent`, `issue_claim`, `issue_lease`, `human_decisions`, `event_cursor`, `capabilities`, and `idempotency`.
+
+For retry-safe writes, pass the optional global `--idempotency-key <key>`. The same key is replayed only when the operation and canonical request payload match; a mismatch returns `idempotency_conflict` with exit code 4. Failed writes are not memoized, and normal `revision_conflict` and `database_busy` behavior remains unchanged.
+
+Use `bettr issue batch --input <path> --json` for an atomic JSON array of `issue_create`, `issue_edit`, `issue_comment`, `issue_start`, `issue_block`, `issue_resume`, `issue_complete`, `issue_cancel`, and `issue_reopen` operations. Use `--input -` for stdin. A batch commits all operations or rolls them all back; `--idempotency-key` replays the complete result.
+
+Stop when blocked by an unsupported contract or required human decision rather than inventing a replacement command.
 
 ## Work lifecycle
 

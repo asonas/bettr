@@ -250,6 +250,29 @@ impl Transition {
         }
     }
 
+    pub fn idempotency_payload(&self) -> serde_json::Value {
+        match self {
+            Self::Start => serde_json::json!({ "kind": "start" }),
+            Self::Block(block) => serde_json::json!({
+                "kind": "block",
+                "reason": block.reason,
+                "wait_kind": block.wait_kind,
+            }),
+            Self::Resume => serde_json::json!({ "kind": "resume" }),
+            Self::Complete(complete) => serde_json::json!({
+                "kind": "complete",
+                "summary": complete.summary,
+                "verification": complete.verification,
+            }),
+            Self::Cancel(cancel) => {
+                serde_json::json!({ "kind": "cancel", "reason": cancel.reason })
+            }
+            Self::Reopen(reopen) => {
+                serde_json::json!({ "kind": "reopen", "reason": reopen.reason })
+            }
+        }
+    }
+
     pub const fn changed_fields(&self) -> &'static [&'static str] {
         match self {
             Self::Start | Self::Resume => &["state"],
@@ -298,7 +321,7 @@ pub struct DecisionResolution {
     transition: Option<Transition>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct DecisionResolutionInput {
     target_state: IssueState,
     summary: Option<String>,
@@ -636,15 +659,15 @@ impl IssueReference {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct IssueDependency {
     pub blocker: String,
     pub blocked: String,
-    pub relation: &'static str,
+    pub relation: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct IssueParent {
     pub child: String,
     pub parent: String,
@@ -767,6 +790,7 @@ pub struct IssuePatch {
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+#[allow(clippy::enum_variant_names)]
 pub enum BatchOperation {
     IssueCreate {
         project: Option<String>,
@@ -821,6 +845,22 @@ pub enum BatchOperation {
         revision: i64,
         reason: String,
     },
+}
+
+impl BatchOperation {
+    pub const fn operation_name(&self) -> &'static str {
+        match self {
+            Self::IssueCreate { .. } => "issue_create",
+            Self::IssueEdit { .. } => "issue_edit",
+            Self::IssueComment { .. } => "issue_comment",
+            Self::IssueStart { .. } => "issue_start",
+            Self::IssueBlock { .. } => "issue_block",
+            Self::IssueResume { .. } => "issue_resume",
+            Self::IssueComplete { .. } => "issue_complete",
+            Self::IssueCancel { .. } => "issue_cancel",
+            Self::IssueReopen { .. } => "issue_reopen",
+        }
+    }
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]

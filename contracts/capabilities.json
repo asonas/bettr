@@ -9,6 +9,6 @@
     "human_decisions": true,
     "event_cursor": true,
     "capabilities": true,
-    "idempotency": false
+    "idempotency": true
   }
 }

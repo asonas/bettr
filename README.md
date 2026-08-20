@@ -184,6 +184,29 @@ Human automation can set `BETTR_OPERATOR`; otherwise bettr uses the OS username:
 BETTR_OPERATOR=reviewer bettr issue resume 1 --project bettr --revision 4
 ```
 
+### Retry-safe writes and JSON batches
+
+Pass the optional global `--idempotency-key <key>` to make a successful write
+safe to retry. The same key replays the stored JSON result only when the
+operation and canonical request payload match. Reusing a key with a different
+request returns `idempotency_conflict` with exit code 4; failed writes are not
+memoized.
+
+Issue mutations can also be executed atomically from a JSON array:
+
+```sh
+bettr issue batch --project bettr --input batch.json --json
+bettr --idempotency-key batch-20260820 issue batch \
+  --project bettr --input - --json <<'JSON'
+[{"operation":"issue_create","title":"First issue"}]
+JSON
+```
+
+Use `--input -` for stdin. The batch supports `issue_create`, `issue_edit`,
+`issue_comment`, `issue_start`, `issue_block`, `issue_resume`,
+`issue_complete`, `issue_cancel`, and `issue_reopen`; all operations commit or
+all roll back. An idempotency key replays the complete batch result.
+
 ## Phase 2 coordination
 
 Discover the commands a caller may use before starting work:
@@ -229,7 +252,7 @@ wayfinder-style consumers can persist an exclusive event cursor:
 bettr event list --after <cursor> --limit 100 --include-issue --json
 ```
 
-The Codex adapter is in [`skills/bettr`](skills/bettr), the Claude Code adapter is in [`skills/bettr-claude`](skills/bettr-claude), and a wayfinder integration example is in [`examples/wayfinder/phase2-workflow.md`](examples/wayfinder/phase2-workflow.md). Idempotency is not advertised as available yet.
+The Codex adapter is in [`skills/bettr`](skills/bettr), the Claude Code adapter is in [`skills/bettr-claude`](skills/bettr-claude), and a wayfinder integration example is in [`examples/wayfinder/phase2-workflow.md`](examples/wayfinder/phase2-workflow.md). Capability discovery advertises idempotency as available.
 
 `BETTR_PROJECT` supplies a default project. Project resolution is command argument, environment, nearest `.bettr.toml`, user config, then no default. User config is stored at `~/Library/Application Support/bettr/config.toml` on macOS and `${XDG_CONFIG_HOME:-~/.config}/bettr/config.toml` on Linux.
 
