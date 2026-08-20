@@ -44,6 +44,8 @@ The type of `data` is command-specific. It can be an object, an array, or anothe
 
 `issue dependency` and `issue parent` responses use structured `PROJECT#NUMBER` references. An unqualified Issue number requires `--project`. Dependencies are directed `blocks` edges; parent relations are one level deep.
 
+`issue show` includes `dependencies` and `worktrees` arrays. Worktree records contain the Issue reference, canonical Git worktree path, nullable branch name, active state, and attachment/deactivation timestamps. Issues may have no worktrees, and multiple active or inactive records may be retained for one Issue. `issue worktree add|remove|list` manages these records; `add` requires a Git worktree, while `remove` can target a previously stored path after the worktree has been removed. `issue start` and `issue claim` attach the current Git worktree when one is available. Completing an Issue deactivates its active worktree records.
+
 ## Event cursor
 
 `event list --after CURSOR [--limit LIMIT] [--include-issue] --json` returns:
@@ -183,17 +185,17 @@ When a command that requires an initialized database selects an existing SQLite 
 
 For normal local use, bettr verifies that the selected path resolves to a regular file and checks its header without opening SQLite, then rechecks the identity on the opened connection before enabling connection settings. A known older bettr database schema is migrated in a single transaction before the command continues. This protects an unrelated SQLite database from accidental path selection without changing its existing bytes or creating SQLite sidecars during the header preflight.
 
-The SQLite database schema version is independent from the JSON response `schema_version`. The current database schema version is 7; versions 1 through 6 are migrated automatically and their applied versions are recorded in `schema_migrations`. A bettr database with an unknown schema version is rejected before SQLite is opened for writing and exits 2:
+The SQLite database schema version is independent from the JSON response `schema_version`. The current database schema version is 8; versions 1 through 7 are migrated automatically and their applied versions are recorded in `schema_migrations`. A bettr database with an unknown schema version is rejected before SQLite is opened for writing and exits 2:
 
 ```json
 {
   "schema_version": 1,
   "error": {
     "code": "unsupported_database_schema_version",
-    "message": "database schema version 99 is unsupported; current version is 7",
+    "message": "database schema version 99 is unsupported; current version is 8",
     "details": {
       "found_version": 99,
-      "current_version": 7
+      "current_version": 8
     }
   }
 }

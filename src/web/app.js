@@ -156,6 +156,8 @@ export function createWebController({
     const key = issueKey({ project, number });
     const history = response.data.history || [];
     const decisions = response.data.decisions || [];
+    const dependencies = response.data.dependencies || [];
+    const worktrees = response.data.worktrees || [];
     const wait = response.data.wait || null;
     const activity = history.map((event) => {
       const body = activityBody(event);
@@ -164,10 +166,28 @@ export function createWebController({
       const session = event.context?.session_id ? ` · ${event.context.session_id}` : "";
       return `<article class="activity-item"><div class="activity-meta"><span class="activity-type">${escapeHtml(label)} · ${escapeHtml(actor)}${escapeHtml(session)}</span><time datetime="${escapeHtml(event.created_at)}">${formatDate(event.created_at)}</time></div><p class="activity-body display-text">${escapeDisplayText(body || "Change recorded")}</p></article>`;
     }).join("");
-    app.innerHTML = `<div class="detail-layout"><article><p class="eyebrow">${escapeHtml(project)} / Issue ${number}</p><div class="detail-key-row"><p class="detail-key">${escapeHtml(key)} · revision ${issue.revision}</p>${copyIssueButton(key)}</div><h1 class="detail-title" tabindex="-1">${escapeHtml(issue.title)}</h1><div class="detail-body display-text">${escapeDisplayText(issue.body || "")}</div>${renderDecisionSection(decisions, issue.revision, wait)}<h2 class="activity-heading">Activity</h2><div class="activity-list">${activity || `<div class="empty-state"><strong>No activity yet</strong><span>Comments and state changes from the CLI will appear here.</span></div>`}</div></article><aside class="property-rail" aria-label="Issue properties"><dl class="property-list"><div><dt>State</dt><dd><span class="state-pill ${escapeHtml(issue.state)}">${escapeHtml(statusLabels[issue.state] || issue.state)}</span></dd></div><div><dt>Priority</dt><dd>${escapeHtml(issue.priority || "Not set")}</dd></div><div><dt>Assignee</dt><dd>${escapeHtml(issue.assignee_name || "Unassigned")}</dd></div><div><dt>Created</dt><dd>${formatDate(issue.created_at)}</dd></div><div><dt>Updated</dt><dd>${formatDate(issue.updated_at)}</dd></div><div><dt>Wait</dt><dd>${wait ? `${escapeHtml(wait.label)}: ${escapeDisplayText(wait.reason)}` : "No active wait"}</dd></div><div><dt>Context</dt><dd>revision ${issue.revision}</dd></div></dl></aside></div>`;
+    app.innerHTML = `<div class="detail-layout"><article><p class="eyebrow">${escapeHtml(project)} / Issue ${number}</p><div class="detail-key-row"><p class="detail-key">${escapeHtml(key)} · revision ${issue.revision}</p>${copyIssueButton(key)}</div><h1 class="detail-title" tabindex="-1">${escapeHtml(issue.title)}</h1><div class="detail-body display-text">${escapeDisplayText(issue.body || "")}</div>${renderDependencySection(dependencies)}${renderWorktreeSection(worktrees)}${renderDecisionSection(decisions, issue.revision, wait)}<h2 class="activity-heading">Activity</h2><div class="activity-list">${activity || `<div class="empty-state"><strong>No activity yet</strong><span>Comments and state changes from the CLI will appear here.</span></div>`}</div></article><aside class="property-rail" aria-label="Issue properties"><dl class="property-list"><div><dt>State</dt><dd><span class="state-pill ${escapeHtml(issue.state)}">${escapeHtml(statusLabels[issue.state] || issue.state)}</span></dd></div><div><dt>Priority</dt><dd>${escapeHtml(issue.priority || "Not set")}</dd></div><div><dt>Assignee</dt><dd>${escapeHtml(issue.assignee_name || "Unassigned")}</dd></div><div><dt>Created</dt><dd>${formatDate(issue.created_at)}</dd></div><div><dt>Updated</dt><dd>${formatDate(issue.updated_at)}</dd></div><div><dt>Wait</dt><dd>${wait ? `${escapeHtml(wait.label)}: ${escapeDisplayText(wait.reason)}` : "No active wait"}</dd></div><div><dt>Context</dt><dd>revision ${issue.revision}</dd></div></dl></aside></div>`;
     bindCopyButtons();
     bindDecisionForms(project, number);
     app.removeAttribute("aria-busy");
+  }
+
+  function renderDependencySection(dependencies) {
+    const content = dependencies.length
+      ? `<ul class="relation-list">${dependencies.map((dependency) => `<li class="relation-item display-text">${escapeDisplayText(dependency.blocker)} ${escapeHtml(dependency.relation)} ${escapeDisplayText(dependency.blocked)}</li>`).join("")}</ul>`
+      : `<div class="empty-state"><strong>No dependencies</strong><span>This Issue has no recorded dependency relation.</span></div>`;
+    return `<section class="relation-section" aria-labelledby="dependency-heading"><h2 id="dependency-heading">Dependencies</h2>${content}</section>`;
+  }
+
+  function renderWorktreeSection(worktrees) {
+    const content = worktrees.length
+      ? `<ul class="worktree-list">${worktrees.map((worktree) => {
+        const state = worktree.active ? "Active" : "Inactive";
+        const branch = worktree.branch || "Detached HEAD";
+        return `<li class="worktree-item"><div class="worktree-item-header"><strong>${state}</strong><time datetime="${escapeHtml(worktree.updated_at)}">${formatDate(worktree.updated_at)}</time></div><dl class="worktree-properties"><div><dt>Branch</dt><dd class="display-text">${escapeDisplayText(branch)}</dd></div><div><dt>Path</dt><dd class="display-text">${escapeDisplayText(worktree.path)}</dd></div></dl></li>`;
+      }).join("")}</ul>`
+      : `<div class="empty-state"><strong>No linked worktrees</strong><span>Attach a Git worktree when work begins.</span></div>`;
+    return `<section class="worktree-section" aria-labelledby="worktree-heading"><h2 id="worktree-heading">Worktrees</h2>${content}</section>`;
   }
 
   function renderDecisionSection(decisions, revision, wait) {

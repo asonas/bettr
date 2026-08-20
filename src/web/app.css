@@ -174,6 +174,18 @@ h1 { margin: 0; font-size: clamp(26px, 3vw, 36px); font-weight: 720; letter-spac
 .display-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .detail-body { margin: 29px 0 37px; color: var(--ink); font-size: 14px; line-height: 1.75; }
 .detail-body:empty::before { color: var(--ink-faint); content: "No body"; }
+.relation-section, .worktree-section { display: grid; gap: 12px; margin: 38px 0 42px; }
+.relation-section > h2, .worktree-section > h2 { display: flex; align-items: center; gap: 9px; margin: 0; color: var(--ink-muted); font-size: 11px; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
+.relation-section > h2::after, .worktree-section > h2::after { height: 1px; flex: 1; background: var(--line); content: ""; }
+.relation-list, .worktree-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.relation-item, .worktree-item { padding: 12px 14px; color: var(--ink-muted); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; line-height: 1.5; }
+.worktree-item { display: grid; gap: 10px; }
+.worktree-item-header { display: flex; justify-content: space-between; gap: 12px; color: var(--success); font-size: 11px; }
+.worktree-item-header time { color: var(--ink-faint); font-weight: 400; }
+.worktree-properties { display: grid; gap: 8px; margin: 0; }
+.worktree-properties div { display: grid; gap: 3px; }
+.worktree-properties dt { color: var(--ink-faint); font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.worktree-properties dd { margin: 0; color: var(--ink); font-size: 11px; }
 .decision-section { display: grid; gap: 12px; margin: 38px 0 42px; }
 .decision-section > h2, .wait-context h2 { margin: 0; color: var(--ink-muted); font-size: 11px; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
 .wait-context { display: grid; gap: 5px; padding: 16px 18px; color: var(--ink-muted); background: var(--updated-surface); border: 1px solid color-mix(in srgb, var(--signal) 35%, var(--line)); border-inline-start: 3px solid var(--signal); border-radius: 8px; }

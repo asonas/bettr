@@ -57,7 +57,7 @@ For edits and state transitions, fetch the current Issue first and pass its revi
 
 Read `.data.capabilities` from `bettr capabilities --json` before selecting a workflow. Use only capabilities whose value is `true`; ignore additive fields and stop with a clear report when the JSON contract version is unsupported. The shared matrix is [../../contracts/capabilities.json](../../contracts/capabilities.json).
 
-The implemented capability names are `issue_dependencies`, `issue_parent`, `issue_claim`, `issue_lease`, `human_decisions`, `event_cursor`, `capabilities`, `idempotency`, `audit_jsonl`, and `redaction`.
+The implemented capability names are `issue_dependencies`, `issue_worktrees`, `issue_parent`, `issue_claim`, `issue_lease`, `human_decisions`, `event_cursor`, `capabilities`, `idempotency`, `audit_jsonl`, and `redaction`.
 
 For retry-safe writes, pass the optional global `--idempotency-key <key>`. The same key is replayed only when the operation and canonical request payload match; a mismatch returns `idempotency_conflict` with exit code 4. Failed writes are not memoized, and normal `revision_conflict` and `database_busy` behavior remains unchanged.
 

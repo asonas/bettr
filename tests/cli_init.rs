@@ -45,7 +45,7 @@ fn assert_project_list_rejected_without_file_changes(
 }
 
 #[test]
-fn init_creates_a_version_seven_database_with_migration_history() {
+fn init_creates_a_version_eight_database_with_migration_history() {
     let app = crate::support::TestApp::new();
 
     app.command()
@@ -59,7 +59,7 @@ fn init_creates_a_version_seven_database_with_migration_history() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        7
+        8
     );
     let migrations = connection
         .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
@@ -80,6 +80,7 @@ fn init_creates_a_version_seven_database_with_migration_history() {
             (5, "blocked_decision_context".to_owned()),
             (6, "repair_blocked_decision_context".to_owned()),
             (7, "jsonl_audit_cursor".to_owned()),
+            (8, "issue_worktrees".to_owned()),
         ]
     );
     assert_eq!(
@@ -177,7 +178,7 @@ fn project_list_migrates_a_version_one_database_and_records_history() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        7
+        8
     );
     assert_eq!(
         connection
@@ -208,6 +209,7 @@ fn project_list_migrates_a_version_one_database_and_records_history() {
             (5, "blocked_decision_context".to_owned()),
             (6, "repair_blocked_decision_context".to_owned()),
             (7, "jsonl_audit_cursor".to_owned()),
+            (8, "issue_worktrees".to_owned()),
         ]
     );
     let audit_count: i64 = connection
@@ -218,7 +220,7 @@ fn project_list_migrates_a_version_one_database_and_records_history() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(audit_count, 6);
+    assert_eq!(audit_count, 7);
     let metadata: String = connection
         .query_row(
             "SELECT metadata_json FROM audit_events
@@ -231,9 +233,9 @@ fn project_list_migrates_a_version_one_database_and_records_history() {
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&metadata).unwrap(),
         serde_json::json!({
-            "from_version": 6,
-            "to_version": 7,
-            "migration": "jsonl_audit_cursor",
+            "from_version": 7,
+            "to_version": 8,
+            "migration": "issue_worktrees",
         })
     );
 }
@@ -272,7 +274,7 @@ fn project_list_rejects_an_unknown_bettr_schema_version_without_changes() {
         "unsupported_database_schema_version"
     );
     assert_eq!(response["error"]["details"]["found_version"], 99);
-    assert_eq!(response["error"]["details"]["current_version"], 7);
+    assert_eq!(response["error"]["details"]["current_version"], 8);
     assert_eq!(std::fs::read(&app.database).unwrap(), expected_bytes);
     assert_eq!(
         directory_entries(app.dir.path()),

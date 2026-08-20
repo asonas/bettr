@@ -5,6 +5,31 @@ import { createWebController } from "../../src/web/app.js";
 import { issue, jsonResponse, mountShell } from "./support.js";
 
 describe("Issue detail activity", () => {
+  it("renders dependency relations and linked worktrees", async () => {
+    mountShell();
+    const fetch = vi.fn((path) => path.startsWith("/api/issues/")
+      ? Promise.resolve(jsonResponse({
+        issue: issue(),
+        history: [],
+        dependencies: [{ blocker: "alpha#2", relation: "blocks", blocked: "bettr#1" }],
+        worktrees: [
+          { issue: "bettr#1", path: "/tmp/feature", branch: "feature/worktrees", active: true, updated_at: "2026-08-20T09:00:00Z" },
+          { issue: "bettr#1", path: "/tmp/old", branch: null, active: false, updated_at: "2026-08-19T09:00:00Z" },
+        ],
+      }))
+      : Promise.resolve(jsonResponse([])));
+    const controller = createWebController({ fetch });
+
+    window.location.hash = "#/issues/bettr/1";
+    await controller.route();
+
+    expect(document.querySelector(".relation-item").textContent).toBe("alpha#2 blocks bettr#1");
+    expect(document.querySelectorAll(".worktree-item")).toHaveLength(2);
+    expect(document.querySelector(".worktree-list").textContent).toContain("feature/worktrees");
+    expect(document.querySelector(".worktree-list").textContent).toContain("Detached HEAD");
+    expect(document.querySelector(".worktree-list").textContent).toContain("/tmp/old");
+  });
+
   it("renders meaningful activity text for creation, edits, and comments", async () => {
     mountShell();
     const history = [

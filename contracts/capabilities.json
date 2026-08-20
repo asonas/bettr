@@ -3,6 +3,7 @@
   "cli_version": "0.1.0",
   "capabilities": {
     "issue_dependencies": true,
+    "issue_worktrees": true,
     "issue_parent": true,
     "issue_claim": true,
     "issue_lease": true,

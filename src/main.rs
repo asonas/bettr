@@ -6,6 +6,7 @@ mod output;
 mod self_update;
 mod store;
 mod web;
+mod worktree;
 
 fn main() -> std::process::ExitCode {
     let arguments = std::env::args_os().collect::<Vec<_>>();
@@ -203,10 +204,10 @@ fn run(
                 crate::cli::IssueSubcommand::Show(show_command) => {
                     let project =
                         crate::require_project(&mut app, project.as_deref(), "issue_show")?;
-                    let issue = app.show_issue(project, show_command.number)?;
+                    let issue = app.show_issue_details(project, show_command.number)?;
                     match output_mode {
                         crate::output::OutputMode::Human => {
-                            crate::output::write_issue_human(project, &issue)
+                            crate::output::write_issue_details_human(project, &issue)
                         }
                         crate::output::OutputMode::Json => crate::output::write_success(issue),
                     }
@@ -328,6 +329,54 @@ fn run(
                             }
                             crate::output::OutputMode::Json => {
                                 crate::output::write_success(relations)
+                            }
+                        }
+                    }
+                },
+                crate::cli::IssueSubcommand::Worktree(command) => match command.command {
+                    crate::cli::IssueWorktreeSubcommand::Add(command) => {
+                        let context = crate::domain::ExecutionContext::resolve()?;
+                        let worktree = app.add_worktree(
+                            &command.reference,
+                            command.path.as_deref(),
+                            project.as_deref(),
+                            &context,
+                        )?;
+                        match output_mode {
+                            crate::output::OutputMode::Human => {
+                                crate::output::write_issue_worktree_human(&worktree)
+                            }
+                            crate::output::OutputMode::Json => {
+                                crate::output::write_success(worktree)
+                            }
+                        }
+                    }
+                    crate::cli::IssueWorktreeSubcommand::Remove(command) => {
+                        let context = crate::domain::ExecutionContext::resolve()?;
+                        let worktree = app.remove_worktree(
+                            &command.reference,
+                            command.path.as_deref(),
+                            project.as_deref(),
+                            &context,
+                        )?;
+                        match output_mode {
+                            crate::output::OutputMode::Human => {
+                                crate::output::write_issue_worktree_human(&worktree)
+                            }
+                            crate::output::OutputMode::Json => {
+                                crate::output::write_success(worktree)
+                            }
+                        }
+                    }
+                    crate::cli::IssueWorktreeSubcommand::List(command) => {
+                        let worktrees =
+                            app.list_worktrees(&command.reference, project.as_deref())?;
+                        match output_mode {
+                            crate::output::OutputMode::Human => {
+                                crate::output::write_issue_worktrees_human(&worktrees)
+                            }
+                            crate::output::OutputMode::Json => {
+                                crate::output::write_success(worktrees)
                             }
                         }
                     }

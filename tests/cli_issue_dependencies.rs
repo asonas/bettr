@@ -65,6 +65,17 @@ fn dependency_commands_add_list_and_reject_cycles() {
     assert_eq!(relations.as_array().unwrap().len(), 1);
     assert_eq!(relations[0]["blocker"], "alpha#1");
 
+    let shown = app
+        .command()
+        .args(["issue", "show", "1", "--project", "beta", "--json"])
+        .output()
+        .unwrap();
+    let shown = json_data(&shown);
+    assert_eq!(shown["dependencies"].as_array().unwrap().len(), 1);
+    assert_eq!(shown["dependencies"][0]["blocker"], "alpha#1");
+    assert_eq!(shown["dependencies"][0]["blocked"], "beta#1");
+    assert_eq!(shown["worktrees"].as_array().unwrap().len(), 0);
+
     app.command()
         .args(["issue", "dependency", "add", "alpha#1", "beta#1", "--json"])
         .assert()

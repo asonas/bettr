@@ -613,6 +613,7 @@ pub struct IssueListItem {
     pub project: String,
     #[serde(flatten)]
     pub issue: Issue,
+    pub worktrees: Vec<IssueWorktree>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -665,6 +666,31 @@ pub struct IssueDependency {
     pub blocked: String,
     pub relation: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct IssueWorktree {
+    pub issue: String,
+    pub path: String,
+    pub branch: Option<String>,
+    pub active: bool,
+    pub attached_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub deactivated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct IssueDetails {
+    #[serde(flatten)]
+    pub issue: Issue,
+    pub dependencies: Vec<IssueDependency>,
+    pub worktrees: Vec<IssueWorktree>,
+}
+
+#[derive(Clone, Debug)]
+pub struct WorktreeContext {
+    pub path: String,
+    pub branch: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]

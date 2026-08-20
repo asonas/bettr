@@ -167,6 +167,22 @@ pub fn write_issue_human(project: &str, issue: &crate::domain::Issue) {
     );
 }
 
+pub fn write_issue_details_human(project: &str, details: &crate::domain::IssueDetails) {
+    write_issue_human(project, &details.issue);
+    println!("dependencies:");
+    if details.dependencies.is_empty() {
+        println!("none");
+    } else {
+        write_issue_dependencies_human(&details.dependencies);
+    }
+    println!("worktrees:");
+    if details.worktrees.is_empty() {
+        println!("none");
+    } else {
+        write_issue_worktrees_human(&details.worktrees);
+    }
+}
+
 pub fn write_issue_list_human(issues: &[crate::domain::IssueListItem]) {
     for issue in issues {
         write_issue_summary(issue);
@@ -215,6 +231,28 @@ pub fn write_issue_dependency_human(relation: &crate::domain::IssueDependency) {
 pub fn write_issue_dependencies_human(relations: &[crate::domain::IssueDependency]) {
     for relation in relations {
         write_issue_dependency_human(relation);
+    }
+}
+
+pub fn write_issue_worktree_human(worktree: &crate::domain::IssueWorktree) {
+    let branch = worktree.branch.as_deref().unwrap_or("detached");
+    let state = if worktree.active {
+        "active"
+    } else {
+        "inactive"
+    };
+    println!(
+        "{} {} branch={} path={}",
+        escape_terminal_controls(&worktree.issue),
+        state,
+        escape_terminal_controls(branch),
+        escape_terminal_controls(&worktree.path),
+    );
+}
+
+pub fn write_issue_worktrees_human(worktrees: &[crate::domain::IssueWorktree]) {
+    for worktree in worktrees {
+        write_issue_worktree_human(worktree);
     }
 }
 
@@ -354,12 +392,26 @@ fn write_status_section(name: &str, issues: &[crate::domain::IssueListItem]) {
 }
 
 fn write_issue_summary(item: &crate::domain::IssueListItem) {
+    let worktrees = item
+        .worktrees
+        .iter()
+        .map(|worktree| worktree.branch.as_deref().unwrap_or("detached"))
+        .collect::<Vec<_>>();
+    let suffix = if worktrees.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " worktrees={}",
+            escape_terminal_controls(&worktrees.join(","))
+        )
+    };
     println!(
-        "{}#{} [{}] {}",
+        "{}#{} [{}] {}{}",
         escape_terminal_controls(&item.project),
         item.issue.number,
         item.issue.state.as_str(),
-        escape_terminal_controls(&item.issue.title)
+        escape_terminal_controls(&item.issue.title),
+        suffix,
     );
 }
 

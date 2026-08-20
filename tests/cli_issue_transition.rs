@@ -483,5 +483,5 @@ fn concurrent_processes_using_the_same_revision_allow_exactly_one_update() {
     assert_eq!(response["error"]["details"]["current_revision"], 2);
     assert_eq!(issue_snapshot(&app).0, "in_progress");
     assert_eq!(issue_snapshot(&app).1, 2);
-    assert_eq!(domain_event_count(&app), 3);
+    assert_eq!(domain_event_count(&app), 4);
 }

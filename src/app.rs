@@ -683,6 +683,7 @@ impl App {
     ) -> Result<Vec<crate::domain::BatchResult>, crate::error::AppError> {
         let started_at = chrono::Utc::now();
         let result = (|| {
+            let worktree = crate::worktree::current()?;
             let input = if input_path == std::path::Path::new("-") {
                 use std::io::Read as _;
                 let mut input = String::new();
@@ -730,7 +731,7 @@ impl App {
                 return Ok(results);
             }
             self.database.with_idempotency(idempotency, |database| {
-                database.batch_issues(&operations, default_project, context)
+                database.batch_issues(&operations, default_project, context, worktree.as_ref())
             })
         })();
         match result {
@@ -810,6 +811,23 @@ impl App {
                 Err(error)
             }
         }
+    }
+
+    pub fn show_issue_details(
+        &mut self,
+        project: &str,
+        number: i64,
+    ) -> Result<crate::domain::IssueDetails, crate::error::AppError> {
+        let issue = self.show_issue(project, number)?;
+        let reference = crate::domain::IssueReference {
+            project: project.to_owned(),
+            number,
+        };
+        Ok(crate::domain::IssueDetails {
+            dependencies: self.database.list_dependencies(&reference)?,
+            worktrees: self.database.list_worktrees(&reference)?,
+            issue,
+        })
     }
 
     pub fn update_issue(
@@ -1141,6 +1159,181 @@ impl App {
         }
     }
 
+    pub fn add_worktree(
+        &mut self,
+        reference: &str,
+        path: Option<&std::path::Path>,
+        default_project: Option<&str>,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::IssueWorktree, crate::error::AppError> {
+        let started_at = chrono::Utc::now();
+        let subject = default_project
+            .map(|project| self.database.project_audit_subject(project))
+            .unwrap_or_default();
+        let result = (|| {
+            let reference = crate::domain::IssueReference::parse(reference, default_project)?;
+            let worktree = match path {
+                Some(path) => crate::worktree::from_path(path)?,
+                None => crate::worktree::current()?.ok_or_else(|| {
+                    crate::error::AppError::InvalidInput(
+                        "current directory is not inside a Git worktree".to_owned(),
+                    )
+                })?,
+            };
+            let idempotency = self.idempotency_request(
+                "issue_worktree_add",
+                serde_json::json!({
+                    "reference": reference.label(),
+                    "path": worktree.path,
+                }),
+                context,
+            )?;
+            self.database.with_idempotency(idempotency, |database| {
+                database.add_worktree(&reference, &worktree, context)
+            })
+        })();
+        match result {
+            Ok(worktree) => Ok(worktree),
+            Err(error) => {
+                if let Err(audit_error) = self.database.record_failed_operation_with_idempotency(
+                    "issue_worktree_add",
+                    context,
+                    &error,
+                    &subject,
+                    started_at,
+                    self.idempotency_key.as_deref(),
+                ) {
+                    return Err(Self::failure_audit_error(
+                        "issue_worktree_add",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn remove_worktree(
+        &mut self,
+        reference: &str,
+        path: Option<&std::path::Path>,
+        default_project: Option<&str>,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::IssueWorktree, crate::error::AppError> {
+        let started_at = chrono::Utc::now();
+        let subject = default_project
+            .map(|project| self.database.project_audit_subject(project))
+            .unwrap_or_default();
+        let result = (|| {
+            let reference = crate::domain::IssueReference::parse(reference, default_project)?;
+            let path = match path {
+                Some(path) => Self::normalize_worktree_path(path)?,
+                None => {
+                    crate::worktree::current()?
+                        .ok_or_else(|| {
+                            crate::error::AppError::InvalidInput(
+                                "current directory is not inside a Git worktree".to_owned(),
+                            )
+                        })?
+                        .path
+                }
+            };
+            let idempotency = self.idempotency_request(
+                "issue_worktree_remove",
+                serde_json::json!({
+                    "reference": reference.label(),
+                    "path": path,
+                }),
+                context,
+            )?;
+            self.database.with_idempotency(idempotency, |database| {
+                database.remove_worktree(&reference, &path, context)
+            })
+        })();
+        match result {
+            Ok(worktree) => Ok(worktree),
+            Err(error) => {
+                if let Err(audit_error) = self.database.record_failed_operation_with_idempotency(
+                    "issue_worktree_remove",
+                    context,
+                    &error,
+                    &subject,
+                    started_at,
+                    self.idempotency_key.as_deref(),
+                ) {
+                    return Err(Self::failure_audit_error(
+                        "issue_worktree_remove",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn list_worktrees(
+        &mut self,
+        reference: &str,
+        default_project: Option<&str>,
+    ) -> Result<Vec<crate::domain::IssueWorktree>, crate::error::AppError> {
+        let started_at = chrono::Utc::now();
+        let context = crate::domain::ExecutionContext::resolve()?;
+        let subject = default_project
+            .map(|project| self.database.project_audit_subject(project))
+            .unwrap_or_default();
+        let result = (|| {
+            let reference = crate::domain::IssueReference::parse(reference, default_project)?;
+            self.database.list_worktrees(&reference)
+        })();
+        match result {
+            Ok(worktrees) => {
+                self.database.record_successful_operation(
+                    "issue_worktree_list",
+                    &context,
+                    &subject,
+                    &[],
+                    started_at,
+                )?;
+                Ok(worktrees)
+            }
+            Err(error) => {
+                if let Err(audit_error) = self.database.record_failed_operation(
+                    "issue_worktree_list",
+                    &context,
+                    &error,
+                    &subject,
+                    started_at,
+                ) {
+                    return Err(Self::failure_audit_error(
+                        "issue_worktree_list",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn normalize_worktree_path(path: &std::path::Path) -> Result<String, crate::error::AppError> {
+        let path = if path.is_absolute() {
+            path.to_owned()
+        } else {
+            let current = std::env::current_dir().map_err(|error| {
+                crate::error::AppError::Internal(format!(
+                    "could not resolve current directory: {error}"
+                ))
+            })?;
+            current.join(path)
+        };
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        path.to_str().map(str::to_owned).ok_or_else(|| {
+            crate::error::AppError::InvalidInput("worktree path must be valid Unicode".to_owned())
+        })
+    }
+
     pub fn set_parent(
         &mut self,
         child: &str,
@@ -1240,6 +1433,7 @@ impl App {
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::ClaimedIssue, crate::error::AppError> {
         let started_at = chrono::Utc::now();
+        let worktree = crate::worktree::current()?;
         let subject = project
             .map(|project| self.database.project_audit_subject(project))
             .unwrap_or_default();
@@ -1249,7 +1443,7 @@ impl App {
             context,
         )?;
         match self.database.with_idempotency(idempotency, |database| {
-            database.claim_issue(project, number, context)
+            database.claim_issue(project, number, context, worktree.as_ref())
         }) {
             Ok(claimed) => Ok(claimed),
             Err(error) => {
@@ -1578,6 +1772,11 @@ impl App {
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::Issue, crate::error::AppError> {
         let started_at = chrono::Utc::now();
+        let worktree = if operation == "issue_start" {
+            crate::worktree::current()?
+        } else {
+            None
+        };
         let transition_payload = transition.as_ref().map_or_else(
             |_| serde_json::Value::Null,
             crate::domain::Transition::idempotency_payload,
@@ -1632,6 +1831,7 @@ impl App {
                     &transition,
                     target_state,
                     context,
+                    worktree.as_ref(),
                 )
             })
         })();
@@ -1830,6 +2030,7 @@ impl App {
             cli_version: env!("CARGO_PKG_VERSION"),
             capabilities: [
                 ("issue_dependencies", true),
+                ("issue_worktrees", true),
                 ("issue_parent", true),
                 ("issue_claim", true),
                 ("issue_lease", true),

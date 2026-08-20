@@ -7,7 +7,7 @@ bettr is a local, non-interactive issue tracker for work shared by people and ag
 | Area | Capabilities |
 | --- | --- |
 | Projects and Issues | Create, edit, list, show, assign, comment on, and transition Issues across five states: `todo`, `in_progress`, `blocked`, `done`, and `cancelled`. |
-| Coordination | Claim Issues, manage leases, send heartbeats, take over stale work, and connect Issues with dependencies or one-level parent relations. |
+| Coordination | Claim Issues, manage leases, send heartbeats, take over stale work, connect Issues with dependencies or one-level parent relations, and link Git worktrees. |
 | Human decisions | Ask for a human decision, record the answer, and apply the selected next state. |
 | History and supervision | Review comments, Issue history, cross-project status, and audit records. |
 | Automation | Use versioned `--json` output, retry-safe idempotency keys, atomic JSON batches, event cursors, and capability discovery. |
@@ -90,6 +90,14 @@ Add `--json` to receive the versioned machine-readable response used by scripts:
 ```sh
 bettr issue show 1 --project bettr --json
 bettr status --json
+```
+
+Issues may be created without a worktree. Starting or claiming an Issue from a Git worktree attaches the current worktree automatically; additional worktrees can be attached or deactivated explicitly:
+
+```sh
+bettr issue worktree add bettr#1 --path /path/to/worktree --json
+bettr issue worktree list bettr#1 --json
+bettr issue worktree remove bettr#1 --path /path/to/worktree --json
 ```
 
 Identify an agent and session when coordinating work:

@@ -78,6 +78,7 @@ impl AuditInvocation {
             ("issue", Some("comment")) => "issue_comment",
             ("issue", Some("history")) => "issue_history",
             ("issue", Some("dependency")) => "issue_dependency",
+            ("issue", Some("worktree")) => "issue_worktree",
             ("issue", Some("parent")) => "issue_parent",
             ("issue", Some("claim")) => "issue_claim",
             ("issue", Some("heartbeat")) => "issue_heartbeat",
@@ -175,6 +176,7 @@ pub enum IssueSubcommand {
     Comment(IssueCommentCommand),
     History(IssueHistoryCommand),
     Dependency(IssueDependencyCommand),
+    Worktree(IssueWorktreeCommand),
     Parent(IssueParentCommand),
     Claim(IssueClaimCommand),
     Heartbeat(IssueHeartbeatCommand),
@@ -295,6 +297,35 @@ pub enum IssueDependencySubcommand {
     Add(IssueRelationCommand),
     Remove(IssueRelationCommand),
     List(IssueReferenceCommand),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueWorktreeCommand {
+    #[command(subcommand)]
+    pub command: IssueWorktreeSubcommand,
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum IssueWorktreeSubcommand {
+    Add(IssueWorktreeAddCommand),
+    Remove(IssueWorktreeRemoveCommand),
+    List(IssueReferenceCommand),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueWorktreeAddCommand {
+    pub reference: String,
+
+    #[arg(long, value_name = "PATH")]
+    pub path: Option<std::path::PathBuf>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IssueWorktreeRemoveCommand {
+    pub reference: String,
+
+    #[arg(long, value_name = "PATH")]
+    pub path: Option<std::path::PathBuf>,
 }
 
 #[derive(clap::Args, Debug)]

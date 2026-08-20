@@ -123,6 +123,24 @@ CREATE INDEX issue_dependencies_blocker
 CREATE INDEX issue_dependencies_blocked
     ON issue_dependencies(blocked_issue_id);
 
+CREATE TABLE issue_worktrees (
+    id TEXT PRIMARY KEY,
+    issue_id TEXT NOT NULL REFERENCES issues(id),
+    path TEXT NOT NULL,
+    branch TEXT,
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+    attached_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deactivated_at TEXT,
+    CHECK ((active = 1 AND deactivated_at IS NULL)
+        OR (active = 0 AND deactivated_at IS NOT NULL))
+);
+
+CREATE INDEX issue_worktrees_issue
+    ON issue_worktrees(issue_id, updated_at);
+CREATE UNIQUE INDEX issue_worktrees_active_path
+    ON issue_worktrees(issue_id, path) WHERE active = 1;
+
 CREATE TABLE issue_parents (
     child_issue_id TEXT PRIMARY KEY REFERENCES issues(id),
     parent_issue_id TEXT NOT NULL REFERENCES issues(id),
@@ -173,4 +191,4 @@ CREATE INDEX decision_requests_status
     ON decision_requests(status);
 
 PRAGMA application_id = 1112822866;
-PRAGMA user_version = 7;
+PRAGMA user_version = 8;

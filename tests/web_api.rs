@@ -242,6 +242,8 @@ fn web_serves_project_issue_detail_with_activity() {
     assert_eq!(status, 200);
     let issue: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(issue["data"]["issue"]["number"], 1);
+    assert_eq!(issue["data"]["dependencies"], serde_json::json!([]));
+    assert_eq!(issue["data"]["worktrees"], serde_json::json!([]));
     assert_eq!(issue["data"]["history"][1]["event_type"], "comment_added");
     assert_eq!(
         issue["data"]["history"][1]["metadata"]["body"],

@@ -18,6 +18,7 @@ fn capabilities_report_the_phase_two_contract_and_match_fixture() {
     assert_eq!(capabilities["json_contract_version"], 1);
     assert_eq!(capabilities["cli_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(capabilities["capabilities"]["issue_dependencies"], true);
+    assert_eq!(capabilities["capabilities"]["issue_worktrees"], true);
     assert_eq!(capabilities["capabilities"]["issue_parent"], true);
     assert_eq!(capabilities["capabilities"]["issue_claim"], true);
     assert_eq!(capabilities["capabilities"]["issue_lease"], true);

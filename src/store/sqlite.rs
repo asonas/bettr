@@ -12,6 +12,11 @@ struct DatabaseIdentity {
     user_version: u32,
 }
 
+struct BatchTransitionContext<'a> {
+    context: &'a crate::domain::ExecutionContext,
+    worktree: Option<&'a crate::domain::WorktreeContext>,
+}
+
 impl DatabaseIdentity {
     fn is_bettr_application(&self) -> bool {
         self.application_id == BETTR_APPLICATION_ID
@@ -418,6 +423,7 @@ impl Database {
         operations: &[crate::domain::BatchOperation],
         default_project: Option<&str>,
         context: &crate::domain::ExecutionContext,
+        worktree: Option<&crate::domain::WorktreeContext>,
     ) -> Result<Vec<crate::domain::BatchResult>, crate::error::AppError> {
         let idempotency = self.take_idempotency("issue_batch")?;
         let transaction = self
@@ -439,6 +445,7 @@ impl Database {
                 operation,
                 default_project,
                 context,
+                worktree,
             )?);
         }
         let project = default_project
@@ -470,6 +477,7 @@ impl Database {
         operation: &crate::domain::BatchOperation,
         default_project: Option<&str>,
         context: &crate::domain::ExecutionContext,
+        worktree: Option<&crate::domain::WorktreeContext>,
     ) -> Result<crate::domain::BatchResult, crate::error::AppError> {
         match operation {
             crate::domain::BatchOperation::IssueCreate {
@@ -549,7 +557,7 @@ impl Database {
                 *number,
                 *revision,
                 Ok(crate::domain::Transition::Start),
-                context,
+                BatchTransitionContext { context, worktree },
             )
             .and_then(|issue| Self::batch_result(operation.operation_name(), issue)),
             crate::domain::BatchOperation::IssueBlock {
@@ -565,7 +573,10 @@ impl Database {
                 *number,
                 *revision,
                 crate::domain::Transition::block(reason.clone(), *wait_kind),
-                context,
+                BatchTransitionContext {
+                    context,
+                    worktree: None,
+                },
             )
             .and_then(|issue| Self::batch_result(operation.operation_name(), issue)),
             crate::domain::BatchOperation::IssueResume {
@@ -579,7 +590,10 @@ impl Database {
                 *number,
                 *revision,
                 Ok(crate::domain::Transition::Resume),
-                context,
+                BatchTransitionContext {
+                    context,
+                    worktree: None,
+                },
             )
             .and_then(|issue| Self::batch_result(operation.operation_name(), issue)),
             crate::domain::BatchOperation::IssueComplete {
@@ -595,7 +609,10 @@ impl Database {
                 *number,
                 *revision,
                 crate::domain::Transition::complete(summary.clone(), verification.clone()),
-                context,
+                BatchTransitionContext {
+                    context,
+                    worktree: None,
+                },
             )
             .and_then(|issue| Self::batch_result(operation.operation_name(), issue)),
             crate::domain::BatchOperation::IssueCancel {
@@ -610,7 +627,10 @@ impl Database {
                 *number,
                 *revision,
                 crate::domain::Transition::cancel(reason.clone()),
-                context,
+                BatchTransitionContext {
+                    context,
+                    worktree: None,
+                },
             )
             .and_then(|issue| Self::batch_result(operation.operation_name(), issue)),
             crate::domain::BatchOperation::IssueReopen {
@@ -625,7 +645,10 @@ impl Database {
                 *number,
                 *revision,
                 crate::domain::Transition::reopen(reason.clone()),
-                context,
+                BatchTransitionContext {
+                    context,
+                    worktree: None,
+                },
             )
             .and_then(|issue| Self::batch_result(operation.operation_name(), issue)),
         }
@@ -662,7 +685,7 @@ impl Database {
         number: i64,
         revision: i64,
         transition: Result<crate::domain::Transition, crate::domain::DomainError>,
-        context: &crate::domain::ExecutionContext,
+        execution: BatchTransitionContext<'_>,
     ) -> Result<crate::domain::Issue, crate::error::AppError> {
         let project = Self::batch_project(project, default_project)?;
         if number < 1 {
@@ -681,7 +704,8 @@ impl Database {
             number,
             revision,
             transition?,
-            context,
+            execution.context,
+            execution.worktree,
         )?;
         Ok(issue)
     }
@@ -858,6 +882,7 @@ impl Database {
         expected_revision: i64,
         transition: crate::domain::Transition,
         context: &crate::domain::ExecutionContext,
+        worktree: Option<&crate::domain::WorktreeContext>,
     ) -> Result<crate::domain::Issue, crate::error::AppError> {
         let project_id = Self::project_id_in_transaction(transaction, project_name)?;
         let issue = Self::issue_in_transaction(transaction, project_id, number)?;
@@ -921,6 +946,25 @@ impl Database {
             &metadata,
             updated_at,
         )?;
+        if target_state == crate::domain::IssueState::InProgress
+            && let Some(worktree) = worktree
+        {
+            Self::upsert_worktree_in_transaction(
+                transaction,
+                &updated_issue,
+                worktree,
+                context,
+                updated_at,
+            )?;
+        }
+        if target_state == crate::domain::IssueState::Done {
+            Self::deactivate_worktrees_in_transaction(
+                transaction,
+                &updated_issue,
+                context,
+                updated_at,
+            )?;
+        }
         Ok(updated_issue)
     }
 
@@ -981,6 +1025,7 @@ impl Database {
         transition: &crate::domain::Transition,
         target_state: crate::domain::IssueState,
         context: &crate::domain::ExecutionContext,
+        worktree: Option<&crate::domain::WorktreeContext>,
     ) -> Result<crate::domain::Issue, crate::error::AppError> {
         let idempotency = self.take_idempotency(transition.operation())?;
         let transaction = self
@@ -1071,6 +1116,25 @@ impl Database {
                 ],
             )
             .map_err(crate::error::AppError::from)?;
+        if target_state == crate::domain::IssueState::InProgress
+            && let Some(worktree) = worktree
+        {
+            Self::upsert_worktree_in_transaction(
+                &transaction,
+                &updated_issue,
+                worktree,
+                context,
+                updated_at,
+            )?;
+        }
+        if target_state == crate::domain::IssueState::Done {
+            Self::deactivate_worktrees_in_transaction(
+                &transaction,
+                &updated_issue,
+                context,
+                updated_at,
+            )?;
+        }
         let issue_id = updated_issue.id.to_string();
         let project_name =
             Self::project_name_in_transaction(&transaction, updated_issue.project_id)?;
@@ -2260,6 +2324,351 @@ impl Database {
         Ok(dependencies)
     }
 
+    pub fn add_worktree(
+        &mut self,
+        reference: &crate::domain::IssueReference,
+        worktree: &crate::domain::WorktreeContext,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::IssueWorktree, crate::error::AppError> {
+        let idempotency = self.take_idempotency("issue_worktree_add")?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::AppError::from)?;
+        if let Some(worktree) = Self::check_idempotency(&transaction, idempotency.as_ref())? {
+            return Ok(worktree);
+        }
+        let issue = Self::issue_reference_in_transaction(&transaction, reference)?;
+        let worktree = Self::upsert_worktree_in_transaction(
+            &transaction,
+            &issue,
+            worktree,
+            context,
+            chrono::Utc::now(),
+        )?;
+        let issue_id = issue.id.to_string();
+        let project_name = Self::project_name_in_transaction(&transaction, issue.project_id)?;
+        let metadata = serde_json::json!({
+            "path": worktree.path,
+            "branch": worktree.branch,
+            "active": worktree.active,
+        })
+        .to_string();
+        Self::insert_audit_event(
+            &transaction,
+            AuditInsert {
+                operation: "issue_worktree_add",
+                idempotency_key: idempotency.as_ref().map(|request| request.key.as_str()),
+                success: true,
+                context,
+                target: Some(("issue", &issue_id)),
+                project: Some((issue.project_id, &project_name)),
+                revision: Some(issue.revision),
+                started_at: worktree.updated_at,
+                exit_code: 0,
+                changed_fields: &["worktrees"],
+                metadata_json: &metadata,
+            },
+        )?;
+        Self::remember_idempotency(&transaction, idempotency.as_ref(), &worktree)?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(worktree)
+    }
+
+    pub fn remove_worktree(
+        &mut self,
+        reference: &crate::domain::IssueReference,
+        path: &str,
+        context: &crate::domain::ExecutionContext,
+    ) -> Result<crate::domain::IssueWorktree, crate::error::AppError> {
+        let idempotency = self.take_idempotency("issue_worktree_remove")?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::AppError::from)?;
+        if let Some(worktree) = Self::check_idempotency(&transaction, idempotency.as_ref())? {
+            return Ok(worktree);
+        }
+        let issue = Self::issue_reference_in_transaction(&transaction, reference)?;
+        let worktree = Self::deactivate_worktree_in_transaction(
+            &transaction,
+            &issue,
+            path,
+            context,
+            chrono::Utc::now(),
+        )?;
+        let issue_id = issue.id.to_string();
+        let project_name = Self::project_name_in_transaction(&transaction, issue.project_id)?;
+        let metadata = serde_json::json!({
+            "path": worktree.path,
+            "branch": worktree.branch,
+            "active": worktree.active,
+        })
+        .to_string();
+        Self::insert_audit_event(
+            &transaction,
+            AuditInsert {
+                operation: "issue_worktree_remove",
+                idempotency_key: idempotency.as_ref().map(|request| request.key.as_str()),
+                success: true,
+                context,
+                target: Some(("issue", &issue_id)),
+                project: Some((issue.project_id, &project_name)),
+                revision: Some(issue.revision),
+                started_at: worktree.updated_at,
+                exit_code: 0,
+                changed_fields: &["worktrees"],
+                metadata_json: &metadata,
+            },
+        )?;
+        Self::remember_idempotency(&transaction, idempotency.as_ref(), &worktree)?;
+        transaction.commit().map_err(crate::error::AppError::from)?;
+        Ok(worktree)
+    }
+
+    pub fn list_worktrees(
+        &self,
+        reference: &crate::domain::IssueReference,
+    ) -> Result<Vec<crate::domain::IssueWorktree>, crate::error::AppError> {
+        let issue = self.issue_reference(reference)?;
+        Self::list_worktrees_by_issue_id(&self.connection, issue.id, false)
+    }
+
+    fn list_worktrees_by_issue_id(
+        connection: &rusqlite::Connection,
+        issue_id: uuid::Uuid,
+        active_only: bool,
+    ) -> Result<Vec<crate::domain::IssueWorktree>, crate::error::AppError> {
+        let active_filter = if active_only {
+            " AND worktree.active = 1"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT project.name, issue.number, worktree.path, worktree.branch,
+                    worktree.active, worktree.attached_at, worktree.updated_at,
+                    worktree.deactivated_at
+             FROM issue_worktrees worktree
+             JOIN issues issue ON issue.id = worktree.issue_id
+             JOIN projects project ON project.id = issue.project_id
+             WHERE worktree.issue_id = ?1{active_filter}
+             ORDER BY worktree.active DESC, worktree.updated_at DESC"
+        );
+        let mut statement = connection
+            .prepare(&sql)
+            .map_err(crate::error::AppError::from)?;
+        let mut rows = statement
+            .query([issue_id.to_string()])
+            .map_err(crate::error::AppError::from)?;
+        let mut worktrees = Vec::new();
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
+            worktrees.push(Self::worktree_from_row(row)?);
+        }
+        Ok(worktrees)
+    }
+
+    fn populate_active_worktrees(
+        &self,
+        issues: &mut [crate::domain::IssueListItem],
+    ) -> Result<(), crate::error::AppError> {
+        for item in issues {
+            item.worktrees =
+                Self::list_worktrees_by_issue_id(&self.connection, item.issue.id, true)?;
+        }
+        Ok(())
+    }
+
+    fn upsert_worktree_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        issue: &crate::domain::Issue,
+        worktree: &crate::domain::WorktreeContext,
+        context: &crate::domain::ExecutionContext,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<crate::domain::IssueWorktree, crate::error::AppError> {
+        if worktree.path.trim().is_empty() {
+            return Err(crate::error::AppError::InvalidInput(
+                "worktree path must not be empty".to_owned(),
+            ));
+        }
+        let existing = transaction.query_row(
+            "SELECT id, branch FROM issue_worktrees
+             WHERE issue_id = ?1 AND path = ?2 AND active = 1",
+            rusqlite::params![issue.id.to_string(), worktree.path],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+        );
+        let existing = match existing {
+            Ok(existing) => Some(existing),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(error) => return Err(crate::error::AppError::from(error)),
+        };
+        if let Some((id, previous_branch)) = existing {
+            transaction
+                .execute(
+                    "UPDATE issue_worktrees
+                     SET branch = ?1, updated_at = ?2
+                     WHERE id = ?3",
+                    rusqlite::params![worktree.branch, now.to_rfc3339(), id],
+                )
+                .map_err(crate::error::AppError::from)?;
+            if previous_branch != worktree.branch {
+                let metadata = Self::event_metadata(
+                    serde_json::json!({
+                        "path": worktree.path,
+                        "branch": worktree.branch,
+                        "previous_branch": previous_branch,
+                    }),
+                    context,
+                )?;
+                Self::insert_domain_event(
+                    transaction,
+                    issue,
+                    "issue_worktree_updated",
+                    &metadata,
+                    now,
+                )?;
+            }
+        } else {
+            transaction
+                .execute(
+                    "INSERT INTO issue_worktrees
+                     (id, issue_id, path, branch, active, attached_at, updated_at, deactivated_at)
+                     VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5, NULL)",
+                    rusqlite::params![
+                        uuid::Uuid::new_v4().to_string(),
+                        issue.id.to_string(),
+                        worktree.path,
+                        worktree.branch,
+                        now.to_rfc3339(),
+                    ],
+                )
+                .map_err(crate::error::AppError::from)?;
+            let metadata = Self::event_metadata(
+                serde_json::json!({
+                    "path": worktree.path,
+                    "branch": worktree.branch,
+                }),
+                context,
+            )?;
+            Self::insert_domain_event(
+                transaction,
+                issue,
+                "issue_worktree_attached",
+                &metadata,
+                now,
+            )?;
+        }
+        Self::worktree_in_transaction(transaction, issue.id, &worktree.path, true)
+    }
+
+    fn deactivate_worktree_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        issue: &crate::domain::Issue,
+        path: &str,
+        context: &crate::domain::ExecutionContext,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<crate::domain::IssueWorktree, crate::error::AppError> {
+        let changed = transaction
+            .execute(
+                "UPDATE issue_worktrees
+                 SET active = 0, updated_at = ?1, deactivated_at = ?1
+                 WHERE issue_id = ?2 AND path = ?3 AND active = 1",
+                rusqlite::params![now.to_rfc3339(), issue.id.to_string(), path],
+            )
+            .map_err(crate::error::AppError::from)?;
+        if changed == 0 {
+            return Err(crate::error::AppError::NotFound(
+                "active worktree not found for Issue".to_owned(),
+            ));
+        }
+        let worktree = Self::worktree_in_transaction(transaction, issue.id, path, false)?;
+        let metadata = Self::event_metadata(
+            serde_json::json!({
+                "path": worktree.path,
+                "branch": worktree.branch,
+            }),
+            context,
+        )?;
+        Self::insert_domain_event(
+            transaction,
+            issue,
+            "issue_worktree_deactivated",
+            &metadata,
+            now,
+        )?;
+        Ok(worktree)
+    }
+
+    fn deactivate_worktrees_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        issue: &crate::domain::Issue,
+        context: &crate::domain::ExecutionContext,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::error::AppError> {
+        let paths = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT path FROM issue_worktrees
+                     WHERE issue_id = ?1 AND active = 1",
+                )
+                .map_err(crate::error::AppError::from)?;
+            let mut rows = statement
+                .query([issue.id.to_string()])
+                .map_err(crate::error::AppError::from)?;
+            let mut paths = Vec::new();
+            while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
+                paths.push(
+                    row.get::<_, String>(0)
+                        .map_err(crate::error::AppError::from)?,
+                );
+            }
+            paths
+        };
+        for path in paths {
+            Self::deactivate_worktree_in_transaction(transaction, issue, &path, context, now)?;
+        }
+        Ok(())
+    }
+
+    fn worktree_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        issue_id: uuid::Uuid,
+        path: &str,
+        active: bool,
+    ) -> Result<crate::domain::IssueWorktree, crate::error::AppError> {
+        let values = transaction
+            .query_row(
+                "SELECT project.name, issue.number, worktree.path, worktree.branch,
+                        worktree.active, worktree.attached_at, worktree.updated_at,
+                        worktree.deactivated_at
+                 FROM issue_worktrees worktree
+                 JOIN issues issue ON issue.id = worktree.issue_id
+                 JOIN projects project ON project.id = issue.project_id
+                 WHERE worktree.issue_id = ?1 AND worktree.path = ?2 AND worktree.active = ?3
+                 ORDER BY worktree.updated_at DESC
+                 LIMIT 1",
+                rusqlite::params![issue_id.to_string(), path, i64::from(active)],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                    ))
+                },
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    crate::error::AppError::NotFound("worktree not found for Issue".to_owned())
+                }
+                error => crate::error::AppError::from(error),
+            })?;
+        Self::worktree_from_values(values)
+    }
+
     pub fn set_parent(
         &mut self,
         child: &crate::domain::IssueReference,
@@ -2410,6 +2819,7 @@ impl Database {
         project: Option<&str>,
         number: Option<i64>,
         context: &crate::domain::ExecutionContext,
+        worktree: Option<&crate::domain::WorktreeContext>,
     ) -> Result<crate::domain::ClaimedIssue, crate::error::AppError> {
         let idempotency = self.take_idempotency("issue_claim")?;
         let (agent, session_id) = Self::agent_session(context)?;
@@ -2556,6 +2966,15 @@ impl Database {
             &metadata,
             now,
         )?;
+        if let Some(worktree) = worktree {
+            Self::upsert_worktree_in_transaction(
+                &transaction,
+                &updated_issue,
+                worktree,
+                context,
+                now,
+            )?;
+        }
         let issue_id = updated_issue.id.to_string();
         let project_name =
             Self::project_name_in_transaction(&transaction, updated_issue.project_id)?;
@@ -2879,8 +3298,10 @@ impl Database {
             issues.push(crate::domain::IssueListItem {
                 project: row.get(0).map_err(crate::error::AppError::from)?,
                 issue: Self::issue_from_row_at(row, 1).map_err(crate::error::AppError::from)?,
+                worktrees: Vec::new(),
             });
         }
+        self.populate_active_worktrees(&mut issues)?;
         Ok(issues)
     }
 
@@ -2909,8 +3330,10 @@ impl Database {
             issues.push(crate::domain::IssueListItem {
                 project: row.get(0).map_err(crate::error::AppError::from)?,
                 issue: Self::issue_from_row_at(row, 1).map_err(crate::error::AppError::from)?,
+                worktrees: Vec::new(),
             });
         }
+        self.populate_active_worktrees(&mut issues)?;
         Ok(issues)
     }
 
@@ -2938,8 +3361,10 @@ impl Database {
             issues.push(crate::domain::IssueListItem {
                 project: row.get(0).map_err(crate::error::AppError::from)?,
                 issue: Self::issue_from_row_at(row, 1).map_err(crate::error::AppError::from)?,
+                worktrees: Vec::new(),
             });
         }
+        self.populate_active_worktrees(&mut issues)?;
         Ok(issues)
     }
 
@@ -4183,6 +4608,9 @@ impl Database {
                 | "issue_dependency_add"
                 | "issue_dependency_remove"
                 | "issue_dependency_list"
+                | "issue_worktree_add"
+                | "issue_worktree_remove"
+                | "issue_worktree_list"
                 | "issue_parent_set"
                 | "issue_parent_list"
                 | "issue_claim"
@@ -4214,6 +4642,9 @@ impl Database {
             | "issue_dependency_add"
             | "issue_dependency_remove"
             | "issue_dependency_list"
+            | "issue_worktree_add"
+            | "issue_worktree_remove"
+            | "issue_worktree_list"
             | "issue_parent_set"
             | "issue_parent_list"
             | "issue_claim"
@@ -4246,6 +4677,9 @@ impl Database {
                 | "issue_dependency_add"
                 | "issue_dependency_remove"
                 | "issue_dependency_list"
+                | "issue_worktree_add"
+                | "issue_worktree_remove"
+                | "issue_worktree_list"
                 | "issue_parent_set"
                 | "issue_parent_list"
                 | "issue_claim"
@@ -4279,6 +4713,8 @@ impl Database {
             "issue_comment" => &["comment", "updated_at"],
             "issue_dependency_add" | "issue_dependency_remove" => &["dependencies"],
             "issue_dependency_list" => &[],
+            "issue_worktree_add" | "issue_worktree_remove" => &["worktrees"],
+            "issue_worktree_list" => &[],
             "issue_parent_set" => &["parent"],
             "issue_parent_list" => &[],
             "issue_claim" => &["state", "assignee_kind", "assignee_name"],
@@ -4702,6 +5138,48 @@ impl Database {
         })
     }
 
+    fn worktree_from_row(
+        row: &rusqlite::Row<'_>,
+    ) -> Result<crate::domain::IssueWorktree, crate::error::AppError> {
+        Self::worktree_from_values((
+            row.get(0).map_err(crate::error::AppError::from)?,
+            row.get(1).map_err(crate::error::AppError::from)?,
+            row.get(2).map_err(crate::error::AppError::from)?,
+            row.get(3).map_err(crate::error::AppError::from)?,
+            row.get(4).map_err(crate::error::AppError::from)?,
+            row.get(5).map_err(crate::error::AppError::from)?,
+            row.get(6).map_err(crate::error::AppError::from)?,
+            row.get(7).map_err(crate::error::AppError::from)?,
+        ))
+    }
+
+    fn worktree_from_values(
+        values: (
+            String,
+            i64,
+            String,
+            Option<String>,
+            i64,
+            String,
+            String,
+            Option<String>,
+        ),
+    ) -> Result<crate::domain::IssueWorktree, crate::error::AppError> {
+        let (project, number, path, branch, active, attached_at, updated_at, deactivated_at) =
+            values;
+        Ok(crate::domain::IssueWorktree {
+            issue: format!("{project}#{number}"),
+            path,
+            branch,
+            active: active != 0,
+            attached_at: Self::parse_timestamp(&attached_at)?,
+            updated_at: Self::parse_timestamp(&updated_at)?,
+            deactivated_at: deactivated_at
+                .map(|value| Self::parse_timestamp(&value))
+                .transpose()?,
+        })
+    }
+
     fn parent_from_row(
         row: &rusqlite::Row<'_>,
     ) -> Result<crate::domain::IssueParent, crate::error::AppError> {
@@ -4742,6 +5220,9 @@ impl Database {
             "issue_completed" => vec!["state", "summary", "verification"],
             "issue_cancelled" | "issue_reopened" => vec!["state", "reason"],
             "issue_dependency_added" | "issue_dependency_removed" => vec!["dependencies"],
+            "issue_worktree_attached" | "issue_worktree_updated" | "issue_worktree_deactivated" => {
+                vec!["worktrees"]
+            }
             "issue_parent_set" => vec!["parent"],
             "issue_claimed" => vec!["state", "assignee_kind", "assignee_name"],
             "issue_taken_over" => vec!["state", "assignee_kind", "assignee_name"],
@@ -5027,6 +5508,7 @@ impl Database {
             (5, "blocked_decision_context"),
             (6, "repair_blocked_decision_context"),
             (7, "jsonl_audit_cursor"),
+            (8, "issue_worktrees"),
         ] {
             transaction
                 .execute(

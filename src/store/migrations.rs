@@ -1,5 +1,5 @@
 pub(crate) const BASE_SCHEMA_VERSION: u32 = 1;
-pub(crate) const LATEST_SCHEMA_VERSION: u32 = 7;
+pub(crate) const LATEST_SCHEMA_VERSION: u32 = 8;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Migration {
@@ -43,6 +43,11 @@ pub(crate) fn migrations() -> &'static [Migration] {
             version: 7,
             name: "jsonl_audit_cursor",
             apply: migrate_to_jsonl_audit,
+        },
+        Migration {
+            version: 8,
+            name: "issue_worktrees",
+            apply: migrate_to_issue_worktrees,
         },
     ]
 }
@@ -263,6 +268,30 @@ fn migrate_to_jsonl_audit(transaction: &rusqlite::Transaction<'_>) -> Result<(),
     Ok(())
 }
 
+fn migrate_to_issue_worktrees(
+    transaction: &rusqlite::Transaction<'_>,
+) -> Result<(), rusqlite::Error> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS issue_worktrees (
+             id TEXT PRIMARY KEY,
+             issue_id TEXT NOT NULL REFERENCES issues(id),
+             path TEXT NOT NULL,
+             branch TEXT,
+             active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+             attached_at TEXT NOT NULL,
+             updated_at TEXT NOT NULL,
+             deactivated_at TEXT,
+             CHECK ((active = 1 AND deactivated_at IS NULL)
+                 OR (active = 0 AND deactivated_at IS NOT NULL))
+         );
+         CREATE INDEX IF NOT EXISTS issue_worktrees_issue
+             ON issue_worktrees(issue_id, updated_at);
+         CREATE UNIQUE INDEX IF NOT EXISTS issue_worktrees_active_path
+             ON issue_worktrees(issue_id, path) WHERE active = 1;",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     fn failing_migration(transaction: &rusqlite::Transaction<'_>) -> Result<(), rusqlite::Error> {
@@ -318,7 +347,8 @@ mod tests {
         assert!(super::is_supported_version(5));
         assert!(super::is_supported_version(6));
         assert!(super::is_supported_version(7));
-        assert!(!super::is_supported_version(8));
+        assert!(super::is_supported_version(8));
+        assert!(!super::is_supported_version(9));
     }
 
     #[test]
@@ -343,7 +373,7 @@ mod tests {
             let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
             assert_eq!(
                 applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-                vec![3, 4, 5, 6, 7]
+                vec![3, 4, 5, 6, 7, 8]
             );
             transaction.commit().unwrap();
         }
@@ -352,13 +382,14 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            7
+            8
         );
         for table in [
             "issue_dependencies",
             "issue_parents",
             "issue_leases",
             "decision_requests",
+            "issue_worktrees",
         ] {
             assert_eq!(
                 connection
@@ -422,7 +453,7 @@ mod tests {
             let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
             assert_eq!(
                 applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-                vec![4, 5, 6, 7]
+                vec![4, 5, 6, 7, 8]
             );
             transaction.commit().unwrap();
         }
@@ -431,7 +462,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            7
+            8
         );
         assert_eq!(
             connection
@@ -511,7 +542,7 @@ mod tests {
             let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
             assert_eq!(
                 applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-                vec![6, 7]
+                vec![6, 7, 8]
             );
             transaction.commit().unwrap();
         }
@@ -538,7 +569,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            7
+            8
         );
     }
 
@@ -555,7 +586,7 @@ mod tests {
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .unwrap();
             let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
-            assert_eq!(applied.len(), 6);
+            assert_eq!(applied.len(), 7);
             transaction.commit().unwrap();
         }
 
@@ -589,7 +620,12 @@ mod tests {
             let transaction = connection
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .unwrap();
-            let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
+            let migrations = super::migrations()
+                .iter()
+                .copied()
+                .filter(|migration| migration.version == 7)
+                .collect::<Vec<_>>();
+            let applied = super::apply_pending(&transaction, &migrations).unwrap();
             assert_eq!(
                 applied.iter().map(|item| item.version).collect::<Vec<_>>(),
                 vec![7]
@@ -663,7 +699,12 @@ mod tests {
             let transaction = connection
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .unwrap();
-            super::apply_pending(&transaction, super::migrations()).unwrap();
+            let migrations = super::migrations()
+                .iter()
+                .copied()
+                .filter(|migration| migration.version == 7)
+                .collect::<Vec<_>>();
+            super::apply_pending(&transaction, &migrations).unwrap();
             transaction.commit().unwrap();
         }
 
@@ -680,6 +721,61 @@ mod tests {
         assert_eq!(
             rows,
             vec![("first".to_owned(), 1), ("second".to_owned(), 2)]
+        );
+    }
+
+    #[test]
+    fn schema_v8_adds_issue_worktrees() {
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection.pragma_update(None, "user_version", 7).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                     version INTEGER PRIMARY KEY,
+                     name TEXT NOT NULL,
+                     applied_at TEXT NOT NULL
+                 );
+                 CREATE TABLE issues (id TEXT PRIMARY KEY);",
+            )
+            .unwrap();
+
+        {
+            let transaction = connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .unwrap();
+            let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
+            assert_eq!(
+                applied.iter().map(|item| item.version).collect::<Vec<_>>(),
+                vec![8]
+            );
+            transaction.commit().unwrap();
+        }
+
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            8
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'issue_worktrees'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'index' AND name = 'issue_worktrees_active_path'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
         );
     }
 }

@@ -89,6 +89,7 @@ struct WebIssueDetail {
     history: Vec<crate::domain::DomainEvent>,
     decisions: Vec<crate::domain::DecisionRequest>,
     dependencies: Vec<crate::domain::IssueDependency>,
+    worktrees: Vec<crate::domain::IssueWorktree>,
     #[serde(skip_serializing_if = "Option::is_none")]
     wait: Option<WebWait>,
 }
@@ -258,9 +259,15 @@ fn route_request(database_path: &std::path::Path, request: &Request) -> HttpResp
                 let history = app.issue_history(project, number)?;
                 let decisions = app.list_decisions(project, number)?;
                 let dependencies = app.list_dependencies(&format!("{project}#{number}"), None)?;
+                let worktrees = app.list_worktrees(&format!("{project}#{number}"), None)?;
                 let item = crate::domain::IssueListItem {
                     project: project.clone(),
                     issue: issue.clone(),
+                    worktrees: worktrees
+                        .iter()
+                        .filter(|worktree| worktree.active)
+                        .cloned()
+                        .collect(),
                 };
                 let wait = web_wait_context(app, &item, &decisions)?;
                 Ok(json_success(WebIssueDetail {
@@ -269,6 +276,7 @@ fn route_request(database_path: &std::path::Path, request: &Request) -> HttpResp
                     history,
                     decisions,
                     dependencies,
+                    worktrees,
                     wait,
                 }))
             })
