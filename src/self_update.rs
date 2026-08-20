@@ -62,6 +62,7 @@ impl crate::app::UpdateSource {
 struct Bundle {
     _temporary_directory: TemporaryDirectory,
     root: std::path::PathBuf,
+    binary: std::path::PathBuf,
     source: crate::app::UpdateSource,
     version: String,
     revision: String,
@@ -162,8 +163,9 @@ fn prepare_release_bundle(
             "release manifest does not match the downloaded release".to_owned(),
         ));
     }
-    validate_bundle_root(&root)?;
-    if binary_version(&root.join("bettr"))? != manifest.version {
+    let binary = root.join("bettr");
+    validate_bundle_root(&root, &binary)?;
+    if binary_version(&binary)? != manifest.version {
         return Err(crate::error::AppError::InvalidInput(
             "release manifest does not match the bundled CLI version".to_owned(),
         ));
@@ -171,6 +173,7 @@ fn prepare_release_bundle(
     Ok(Bundle {
         _temporary_directory: temporary_directory,
         root,
+        binary,
         source: crate::app::UpdateSource::Release,
         version: manifest.version,
         revision: manifest.revision,
@@ -200,10 +203,11 @@ fn prepare_main_bundle(
     command.current_dir(&source_root);
     run_command(&mut command, "cargo build")?;
     let version = binary_version(&binary)?;
-    validate_bundle_root(&source_root)?;
+    validate_bundle_root(&source_root, &binary)?;
     Ok(Bundle {
         _temporary_directory: temporary_directory,
         root: source_root,
+        binary,
         source: crate::app::UpdateSource::Main,
         version,
         revision,
@@ -225,10 +229,10 @@ fn update_cli(bundle: &Bundle) -> ComponentUpdate {
     let display_path = path.display().to_string();
     let staged = sibling_temp_path(&path, "cli");
     let result = (|| {
-        std::fs::copy(bundle.root.join("bettr"), &staged).map_err(|error| {
+        std::fs::copy(&bundle.binary, &staged).map_err(|error| {
             crate::error::AppError::Internal(format!(
                 "could not stage CLI update {}: {error}",
-                bundle.root.join("bettr").display()
+                bundle.binary.display()
             ))
         })?;
         set_executable(&staged)?;
@@ -696,9 +700,12 @@ fn read_release_manifest(
     })
 }
 
-fn validate_bundle_root(root: &std::path::Path) -> Result<(), crate::error::AppError> {
+fn validate_bundle_root(
+    root: &std::path::Path,
+    binary: &std::path::Path,
+) -> Result<(), crate::error::AppError> {
     for path in [
-        root.join("bettr"),
+        binary.to_owned(),
         root.join("skills/bettr/SKILL.md"),
         root.join("skills/bettr-claude/SKILL.md"),
     ] {
