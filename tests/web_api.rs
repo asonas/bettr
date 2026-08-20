@@ -229,6 +229,35 @@ fn web_does_not_advertise_or_handle_keyboard_shortcuts() {
 }
 
 #[test]
+fn web_projects_are_a_sidebar_kanban_with_update_indicators() {
+    let index_html = include_str!("../src/web/index.html");
+    let app_css = include_str!("../src/web/app.css");
+    let app_js = include_str!("../src/web/app.js");
+    let state_js = include_str!("../src/web/state.js");
+
+    assert!(index_html.contains("id=\"project-nav-list\""));
+    assert!(!index_html.contains("#/overview"));
+    assert!(!app_js.contains("project-filter"));
+    assert!(app_js.contains("renderProjects(project = \"\")"));
+    assert!(app_js.contains("kanban-board"));
+    assert!(app_js.contains("updatedIssues"));
+    assert!(app_js.contains("focusedCard"));
+    assert!(app_js.contains("focusedIssue"));
+    assert!(app_js.contains("projectNavInFlight"));
+    assert!(app_js.contains("projectNavSnapshot = \"\""));
+    assert!(app_js.contains("projectMark"));
+    assert!(app_js.contains("aria-label=\"Project ${name}\""));
+    assert!(state_js.contains("changedIssueKeys"));
+    assert!(app_css.contains(".kanban-board"));
+    assert!(app_css.contains(".kanban-card.is-updated"));
+    assert!(app_css.contains(".project-nav-dot { display: grid"));
+    assert!(app_css.contains(".kanban-card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; color: var(--ink-muted);"));
+    assert!(app_css.contains(
+        ".kanban-empty { min-height: 76px; padding: 16px 12px; color: var(--ink-muted);"
+    ));
+}
+
+#[test]
 fn web_serves_project_issue_detail_with_activity() {
     let app = initialize_app();
     let server = WebProcess::start(&app);
