@@ -290,29 +290,29 @@ git commit -m "Document local decision resolution flow"
 - The final branch contains the approved design commit plus implementation/documentation commits.
 - Issue #19 records the verified commit, exact commands, pass/fail outcomes, and the explicit no-merge/no-PR/no-worktree-removal boundary.
 
-- [ ] **Step 1: Check runtime resolution before Rust verification**
+- [x] **Step 1: Check runtime resolution before Rust verification**
 
 Run: `command -v rustc && rustc --version`, `command -v cargo && cargo --version`, and `command -v node && node --version`. Use `mise exec --` for all runtime commands that follow.
 
-- [ ] **Step 2: Run formatting and focused suites**
+- [x] **Step 2: Run formatting and focused suites**
 
 Run: `mise exec -- cargo fmt --check`, `mise exec -- cargo test`, `mise exec -- cargo test --test web_api`, `mise exec -- cargo test --test cli_decisions`, and `mise exec -- npm test`.
 
 Expected: all commands exit 0 with no formatting errors, test failures, or unhandled warnings.
 
-- [ ] **Step 3: Run the required full Rust checks**
+- [x] **Step 3: Run the required full Rust checks**
 
 Run: `mise exec -- cargo test` and `mise exec -- cargo clippy --all-targets -- -D warnings`.
 
 Expected: all Rust tests pass and clippy emits no denied warnings.
 
-- [ ] **Step 4: Build the release binary**
+- [x] **Step 4: Build the release binary**
 
 Run: `mise exec -- cargo build --release`.
 
 Expected: the binary builds from the same committed source as the tests.
 
-- [ ] **Step 5: Inspect the final diff and worktree**
+- [x] **Step 5: Inspect the final diff and worktree**
 
 Run: `git diff --check`, `git status --short --branch`, and `git --no-pager log --oneline --decorate -8`. Confirm only the approved spec, plan, implementation, test, and documentation files are changed; do not rebase, merge, create a PR, or remove the worktree.
 
@@ -320,6 +320,6 @@ Run: `git diff --check`, `git status --short --branch`, and `git --no-pager log 
 
 Add one `[Conversation update]` comment containing the verified commit, test commands/results, loopback and human-only safety behavior, and any remaining limitation. Re-read the Issue and recent history, then transition to `done` only if the requested scope and verification evidence are complete; otherwise record the concrete blocker and keep the Issue active.
 
-- [ ] **Step 7: Commit any final verification-only correction**
+- [x] **Step 7: Commit any final verification-only correction**
 
 If verification exposes a required correction, return to the smallest relevant task, add a failing regression test first, re-run its focused suite, and commit the correction with an English capitalized message. If no correction is needed, make no empty commit.
