@@ -23,3 +23,19 @@ grep -Eq '^[0-9a-f]{64}[[:space:]][[:space:]]bettr-9\.9\.9-x86_64-unknown-linux-
 archive_listing=$(tar -tzf "$archive")
 printf '%s\n' "$archive_listing" | grep -Fx 'bettr'
 printf '%s\n' "$archive_listing" | grep -Fx 'LICENSE'
+
+ci_workflow="$repo_root/.github/workflows/ci.yml"
+test -f "$ci_workflow"
+for required in \
+  'pull_request:' \
+  'push:' \
+  'cargo fmt --all -- --check' \
+  'cargo clippy --all-targets --all-features -- -D warnings' \
+  'cargo test --locked' \
+  'cargo build --locked --release'; do
+  grep -Fq "$required" "$ci_workflow"
+done
+if grep -Fq 'contents: write' "$ci_workflow"; then
+  printf 'CI workflow must not have contents: write\n' >&2
+  exit 1
+fi
