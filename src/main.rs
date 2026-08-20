@@ -421,6 +421,7 @@ fn run(
                     let request = app.resolve_decision(
                         &command.request_id,
                         &command.answer,
+                        None,
                         resolution,
                         &context,
                     )?;

@@ -1495,10 +1495,42 @@ impl Database {
         Ok(request)
     }
 
+    pub fn list_decisions(
+        &self,
+        project_name: &str,
+        number: i64,
+    ) -> Result<Vec<crate::domain::DecisionRequest>, crate::error::AppError> {
+        let project_id = self.project_id(project_name)?;
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT request.id, project.name, issue.number, request.question,
+                        request.background, request.requester_kind, request.requester_name,
+                        request.requester_session_id, request.status, request.answer,
+                        request.resolver_kind, request.resolver_name,
+                        request.resolver_session_id, request.created_at, request.resolved_at
+                 FROM decision_requests request
+                 JOIN issues issue ON issue.id = request.issue_id
+                 JOIN projects project ON project.id = issue.project_id
+                 WHERE issue.project_id = ?1 AND issue.number = ?2
+                 ORDER BY request.created_at ASC, request.id ASC",
+            )
+            .map_err(crate::error::AppError::from)?;
+        let mut rows = statement
+            .query(rusqlite::params![project_id.to_string(), number])
+            .map_err(crate::error::AppError::from)?;
+        let mut decisions = Vec::new();
+        while let Some(row) = rows.next().map_err(crate::error::AppError::from)? {
+            decisions.push(Self::decision_from_row(row).map_err(crate::error::AppError::from)?);
+        }
+        Ok(decisions)
+    }
+
     pub fn resolve_decision(
         &mut self,
         request_id: uuid::Uuid,
         answer: &str,
+        expected_revision: Option<i64>,
         resolution_input: crate::domain::DecisionResolutionInput,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::DecisionRequest, crate::error::AppError> {
@@ -1595,6 +1627,13 @@ impl Database {
         }
 
         let issue = Self::issue_in_transaction(&transaction, project_id, issue_number)?;
+        if let Some(expected_revision) = expected_revision
+            && issue.revision != expected_revision
+        {
+            return Err(crate::error::AppError::RevisionConflict {
+                current_revision: issue.revision,
+            });
+        }
         let now = chrono::Utc::now();
         transaction
             .execute(
@@ -3149,6 +3188,7 @@ impl Database {
                 | "issue_heartbeat"
                 | "issue_takeover"
                 | "decision_request"
+                | "decision_list"
                 | "decision_resolve"
                 | "issue_start"
                 | "issue_block"
@@ -3176,6 +3216,7 @@ impl Database {
             | "issue_heartbeat"
             | "issue_takeover"
             | "decision_request"
+            | "decision_list"
             | "decision_resolve"
             | "issue_start"
             | "issue_block"
@@ -3204,6 +3245,7 @@ impl Database {
                 | "issue_heartbeat"
                 | "issue_takeover"
                 | "decision_request"
+                | "decision_list"
                 | "decision_resolve"
                 | "issue_start"
                 | "issue_block"
@@ -3234,6 +3276,7 @@ impl Database {
             "issue_heartbeat" => &[],
             "issue_takeover" => &["state", "assignee_kind", "assignee_name"],
             "decision_request" => &["state", "decision_request"],
+            "decision_list" => &[],
             "decision_resolve" => &[
                 "decision",
                 "state",
@@ -4071,6 +4114,15 @@ mod tests {
         }
     }
 
+    fn human_context() -> crate::domain::ExecutionContext {
+        crate::domain::ExecutionContext {
+            kind: crate::domain::InitiatorKind::Human,
+            agent: None,
+            session_id: None,
+            operator: Some("reviewer".to_owned()),
+        }
+    }
+
     fn initialized_database() -> (tempfile::TempDir, super::Database) {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("bettr.db");
@@ -4189,5 +4241,126 @@ mod tests {
             )
             .unwrap();
         assert_eq!(revision, Some(2));
+    }
+
+    #[test]
+    fn list_decisions_returns_requests_in_creation_order() {
+        let (_directory, mut database) = initialized_database();
+        database.create_project("bettr", &context()).unwrap();
+        database
+            .create_issue(
+                "bettr",
+                &crate::domain::NewIssue {
+                    title: "decision list".to_owned(),
+                    body: None,
+                    priority: None,
+                },
+                &context(),
+            )
+            .unwrap();
+        database
+            .request_decision(
+                "bettr",
+                1,
+                "Choose the parser",
+                "The parser has two compatible implementations.",
+                &context(),
+            )
+            .unwrap();
+        database
+            .request_decision(
+                "bettr",
+                1,
+                "Choose the rollout",
+                "The rollout has two safe windows.",
+                &context(),
+            )
+            .unwrap();
+
+        let decisions = database.list_decisions("bettr", 1).unwrap();
+
+        assert_eq!(decisions.len(), 2);
+        assert_eq!(decisions[0].question, "Choose the parser");
+        assert_eq!(decisions[1].question, "Choose the rollout");
+        assert_eq!(decisions[0].status, "open");
+        assert_eq!(decisions[1].status, "open");
+    }
+
+    #[test]
+    fn decision_resolution_rejects_a_stale_expected_revision() {
+        let (_directory, mut database) = initialized_database();
+        database.create_project("bettr", &context()).unwrap();
+        let issue = database
+            .create_issue(
+                "bettr",
+                &crate::domain::NewIssue {
+                    title: "stale decision".to_owned(),
+                    body: None,
+                    priority: None,
+                },
+                &context(),
+            )
+            .unwrap();
+        let request = database
+            .request_decision(
+                "bettr",
+                1,
+                "Choose the parser",
+                "The parser has two compatible implementations.",
+                &context(),
+            )
+            .unwrap();
+        let result = database.resolve_decision(
+            request.id,
+            "Use option A",
+            Some(1),
+            crate::domain::DecisionResolutionInput::new(
+                crate::domain::IssueState::Todo,
+                None,
+                None,
+                None,
+                None,
+            ),
+            &human_context(),
+        );
+
+        assert!(matches!(
+            result,
+            Err(crate::error::AppError::RevisionConflict {
+                current_revision: 2
+            })
+        ));
+        let (state, revision): (String, i64) = database
+            .connection
+            .query_row(
+                "SELECT state, revision FROM issues WHERE id = ?1",
+                [issue.id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, "blocked");
+        assert_eq!(revision, 2);
+        assert_eq!(
+            database
+                .connection
+                .query_row(
+                    "SELECT status FROM decision_requests WHERE id = ?1",
+                    [request.id.to_string()],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "open"
+        );
+        assert_eq!(
+            database
+                .connection
+                .query_row(
+                    "SELECT COUNT(*) FROM domain_events WHERE issue_id = ?1",
+                    [issue.id.to_string()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            2
+        );
     }
 }

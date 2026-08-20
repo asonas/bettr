@@ -1110,6 +1110,7 @@ impl App {
         &mut self,
         request_id: &str,
         answer: &str,
+        expected_revision: Option<i64>,
         resolution: crate::domain::DecisionResolutionInput,
         context: &crate::domain::ExecutionContext,
     ) -> Result<crate::domain::DecisionRequest, crate::error::AppError> {
@@ -1119,6 +1120,7 @@ impl App {
             serde_json::json!({
                 "request_id": request_id,
                 "answer": answer,
+                "expected_revision": expected_revision,
                 "resolution": resolution,
             }),
             context,
@@ -1129,9 +1131,20 @@ impl App {
                     "decision request id must be a UUID".to_owned(),
                 )
             })?;
+            if expected_revision.is_some_and(|revision| revision < 1) {
+                return Err(crate::error::AppError::InvalidInput(
+                    "issue revision must be positive".to_owned(),
+                ));
+            }
             crate::domain::validate_decision_text("decision answer", answer)?;
             self.database.with_idempotency(idempotency, |database| {
-                database.resolve_decision(request_id, answer, resolution, context)
+                database.resolve_decision(
+                    request_id,
+                    answer,
+                    expected_revision,
+                    resolution,
+                    context,
+                )
             })
         })();
         match result {
@@ -1147,6 +1160,51 @@ impl App {
                 ) {
                     return Err(Self::failure_audit_error(
                         "decision_resolve",
+                        &error,
+                        &audit_error,
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn list_decisions(
+        &mut self,
+        project: &str,
+        number: i64,
+    ) -> Result<Vec<crate::domain::DecisionRequest>, crate::error::AppError> {
+        let started_at = chrono::Utc::now();
+        let context = crate::domain::ExecutionContext::resolve()?;
+        let subject = self.database.project_audit_subject(project);
+        let result = if number < 1 {
+            Err(crate::error::AppError::InvalidInput(
+                "issue number must be positive".to_owned(),
+            ))
+        } else {
+            self.database.list_decisions(project, number)
+        };
+        match result {
+            Ok(decisions) => {
+                self.database.record_successful_operation(
+                    "decision_list",
+                    &context,
+                    &subject,
+                    &[],
+                    started_at,
+                )?;
+                Ok(decisions)
+            }
+            Err(error) => {
+                if let Err(audit_error) = self.database.record_failed_operation(
+                    "decision_list",
+                    &context,
+                    &error,
+                    &subject,
+                    started_at,
+                ) {
+                    return Err(Self::failure_audit_error(
+                        "decision_list",
                         &error,
                         &audit_error,
                     ));
