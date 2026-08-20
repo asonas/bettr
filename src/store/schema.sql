@@ -161,4 +161,4 @@ CREATE INDEX decision_requests_status
     ON decision_requests(status);
 
 PRAGMA application_id = 1112822866;
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;

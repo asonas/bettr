@@ -1,5 +1,5 @@
 pub(crate) const BASE_SCHEMA_VERSION: u32 = 1;
-pub(crate) const LATEST_SCHEMA_VERSION: u32 = 5;
+pub(crate) const LATEST_SCHEMA_VERSION: u32 = 6;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Migration {
@@ -32,6 +32,11 @@ pub(crate) fn migrations() -> &'static [Migration] {
         Migration {
             version: 5,
             name: "blocked_decision_context",
+            apply: migrate_to_blocked_decision_context,
+        },
+        Migration {
+            version: 6,
+            name: "repair_blocked_decision_context",
             apply: migrate_to_blocked_decision_context,
         },
     ]
@@ -268,7 +273,8 @@ mod tests {
         assert!(super::is_supported_version(3));
         assert!(super::is_supported_version(4));
         assert!(super::is_supported_version(5));
-        assert!(!super::is_supported_version(6));
+        assert!(super::is_supported_version(6));
+        assert!(!super::is_supported_version(7));
     }
 
     #[test]
@@ -293,7 +299,7 @@ mod tests {
             let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
             assert_eq!(
                 applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-                vec![3, 4, 5]
+                vec![3, 4, 5, 6]
             );
             transaction.commit().unwrap();
         }
@@ -302,7 +308,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            5
+            6
         );
         for table in [
             "issue_dependencies",
@@ -335,7 +341,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_v4_and_v5_add_idempotency_and_blocked_decision_context() {
+    fn schema_v4_v5_and_v6_add_and_repair_blocked_decision_context() {
         let mut connection = rusqlite::Connection::open_in_memory().unwrap();
         connection.pragma_update(None, "user_version", 3).unwrap();
         connection
@@ -372,7 +378,7 @@ mod tests {
             let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
             assert_eq!(
                 applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-                vec![4, 5]
+                vec![4, 5, 6]
             );
             transaction.commit().unwrap();
         }
@@ -381,7 +387,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            5
+            6
         );
         assert_eq!(
             connection
@@ -419,7 +425,75 @@ mod tests {
                     |row| row.get::<_, i64>(0),
                 )
                 .unwrap(),
-            1
+                1
+        );
+    }
+
+    #[test]
+    fn schema_v6_repairs_decision_context_columns_missing_from_version_five() {
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection.pragma_update(None, "user_version", 5).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                     version INTEGER PRIMARY KEY,
+                     name TEXT NOT NULL,
+                     applied_at TEXT NOT NULL
+                 );
+                 CREATE TABLE decision_requests (
+                     id TEXT PRIMARY KEY,
+                     issue_id TEXT NOT NULL,
+                     question TEXT NOT NULL,
+                     background TEXT NOT NULL,
+                     requester_kind TEXT,
+                     requester_name TEXT,
+                     requester_session_id TEXT,
+                     status TEXT NOT NULL,
+                     answer TEXT,
+                     resolver_kind TEXT,
+                     resolver_name TEXT,
+                     resolver_session_id TEXT,
+                     created_at TEXT NOT NULL,
+                     resolved_at TEXT
+                 );",
+            )
+            .unwrap();
+
+        {
+            let transaction = connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .unwrap();
+            let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
+            assert_eq!(
+                applied.iter().map(|item| item.version).collect::<Vec<_>>(),
+                vec![6]
+            );
+            transaction.commit().unwrap();
+        }
+
+        for column in [
+            "blocker",
+            "options_json",
+            "recommendation",
+            "resume_condition",
+        ] {
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM pragma_table_info('decision_requests') WHERE name = ?1",
+                        [column],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap(),
+                1,
+                "missing repaired decision request column {column}"
+            );
+        }
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            6
         );
     }
 
@@ -436,7 +510,7 @@ mod tests {
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .unwrap();
             let applied = super::apply_pending(&transaction, super::migrations()).unwrap();
-            assert_eq!(applied.len(), 4);
+            assert_eq!(applied.len(), 5);
             transaction.commit().unwrap();
         }
 

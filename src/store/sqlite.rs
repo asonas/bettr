@@ -4041,6 +4041,7 @@ impl Database {
             (3, "phase_two_coordination"),
             (4, "idempotency_and_audit"),
             (5, "blocked_decision_context"),
+            (6, "repair_blocked_decision_context"),
         ] {
             transaction
                 .execute(
