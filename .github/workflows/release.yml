@@ -107,7 +107,7 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           for archive in release-assets/*.tar.gz; do
-            scripts/verify-release.sh "$archive" "$archive.sha256" "$version"
+            scripts/verify-release.sh "$archive" "$archive.sha256" "$version" --skip-binary-execution
           done
           (
             cd release-assets

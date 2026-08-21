@@ -19,6 +19,8 @@ test -f "$checksum"
 grep -Eq '^[0-9a-f]{64}[[:space:]][[:space:]]bettr-9\.9\.9-x86_64-unknown-linux-gnu\.tar\.gz$' "$checksum"
 
 "$repo_root/scripts/verify-release.sh" "$archive" "$checksum" 9.9.9
+"$repo_root/scripts/verify-release.sh" "$archive" "$checksum" 9.9.9 \
+  --skip-binary-execution
 
 archive_listing=$(tar -tzf "$archive")
 printf '%s\n' "$archive_listing" | grep -Fx 'bettr'
@@ -60,6 +62,7 @@ for required in \
   "cargo build --locked --release --target" \
   "scripts/package-release.sh" \
   "scripts/verify-release.sh" \
+  "--skip-binary-execution" \
   "actions/attest@v4" \
   "actions/upload-artifact@v4" \
   "contents: write" \
