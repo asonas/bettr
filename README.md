@@ -124,6 +124,18 @@ bettr self-update --source main
 
 The JSON response contract is documented in [`docs/json-contract.md`](docs/json-contract.md). Agent-specific workflows are documented in [`skills/bettr`](skills/bettr) and [`skills/bettr-claude`](skills/bettr-claude).
 
+## Repository project context
+
+This repository is explicitly bound to the `bettr` project by the root
+`.bettr.toml`. Run `bettr context --json` from the repository or any nested
+directory and confirm that `project.value` is `bettr` and `project.source` is
+`directory_config` before reading or writing Issues.
+
+When a directory has no project configuration and `project.value` is null,
+ask the human for the project instead of inferring it from `bettr status`, an
+Issue's priority, update time, assignee, or the repository name. `bettr status`
+remains a cross-project supervision view and is not a project-selection input.
+
 ## Data and limits
 
 - bettr stores data locally in SQLite.

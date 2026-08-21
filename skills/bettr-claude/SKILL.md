@@ -20,6 +20,19 @@ bettr capabilities --json
 
 Verify `command -v bettr` and `bettr --help`. Read `.data.capabilities`, reject unsupported JSON contract versions, and invoke only capabilities marked `true`. Treat unknown capability names as unavailable; additive response fields may be ignored.
 
+## Resolve project context before resuming
+
+Run `bettr context --json` before selecting an Issue. Read both
+`project.value` and `project.source` from the response, then pass the resolved
+project explicitly with `--project <value>` for Issue operations. In a bound
+repository, `project.source` should be `directory_config`.
+
+If `project.value` is null, stop and ask the human which project to use. Do not
+infer a project from `bettr status`, Issue priority, update time, assignee, or
+the repository name. `bettr status` is only a cross-project supervision view.
+Even after resolving a project, present multiple possible resumption Issues
+instead of choosing an Issue number without confirmation.
+
 The implemented capability names are `issue_dependencies`, `issue_worktrees`, `issue_parent`, `issue_claim`, `issue_lease`, `human_decisions`, `event_cursor`, `capabilities`, `idempotency`, `audit_jsonl`, `redaction`, and `sqlite_backup_restore`.
 
 For retry-safe writes, pass the optional global `--idempotency-key <key>`. The same key is replayed only when the operation and canonical request payload match; a mismatch returns `idempotency_conflict` with exit code 4. Failed writes are not memoized, and normal `revision_conflict` and `database_busy` behavior remains unchanged.

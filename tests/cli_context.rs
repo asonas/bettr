@@ -206,7 +206,10 @@ fn invalid_or_ambiguous_configuration_exits_two() {
         std::fs::create_dir_all(&home).unwrap();
         write_user_config(&home, contents);
 
-        let output = context_command(&home).output().unwrap();
+        let output = context_command(&home)
+            .current_dir(directory.path())
+            .output()
+            .unwrap();
 
         assert_eq!(output.status.code(), Some(2));
         let response: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();

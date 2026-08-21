@@ -27,6 +27,12 @@ fn codex_and_claude_skills_use_only_declared_contracts() {
     assert!(combined.contains("JSONL"));
     assert!(combined.contains("bettr backup --output"));
     assert!(combined.contains("bettr restore --input"));
+    assert!(combined.contains("project.value"));
+    assert!(combined.contains("project.source"));
+    assert!(combined.contains("directory_config"));
+    let normalized = combined.replace('\n', " ");
+    assert!(normalized.contains("Do not infer a project"));
+    assert!(normalized.contains("cross-project supervision view"));
     for command in [
         "bettr capabilities --json",
         "bettr issue claim",

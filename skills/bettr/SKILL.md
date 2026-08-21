@@ -35,6 +35,19 @@ Use bettr as the local source of truth for agent work. Use the installed CLI and
 
    Human operations use `BETTR_OPERATOR`; otherwise bettr records the OS username.
 
+## Resolve project context before resuming
+
+Run `bettr context --json` before selecting an Issue. Read both
+`project.value` and `project.source` from the response, then pass the resolved
+project explicitly with `--project <value>` for Issue operations. In a bound
+repository, `project.source` should be `directory_config`.
+
+If `project.value` is null, stop and ask the human which project to use. Do not
+infer a project from `bettr status`, Issue priority, update time, assignee, or
+the repository name. `bettr status` is only a cross-project supervision view.
+Even after resolving a project, present multiple possible resumption Issues
+instead of choosing an Issue number without confirmation.
+
 ## Record Work
 
 Use `--project <name>` explicitly and `--json` for agent calls. Successful responses have a `data` field and `schema_version: 1`.
