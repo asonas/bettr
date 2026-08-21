@@ -114,6 +114,24 @@ fn run(
         })?;
         return Err(crate::error::AppError::SelfUpdateFailed(report));
     }
+    if matches!(&cli.command, crate::cli::Command::SelfUninstall(_)) {
+        let report = crate::self_update::uninstall()?;
+        if output_mode == crate::output::OutputMode::Human {
+            crate::output::write_self_uninstall_human(&report);
+        }
+        if report.succeeded() {
+            if output_mode == crate::output::OutputMode::Json {
+                crate::output::write_success(report);
+            }
+            return Ok(());
+        }
+        let report = serde_json::to_value(report).map_err(|error| {
+            crate::error::AppError::Internal(format!(
+                "could not serialize self-uninstall result: {error}"
+            ))
+        })?;
+        return Err(crate::error::AppError::SelfUninstallFailed(report));
+    }
 
     let resolved_context =
         crate::app::App::resolved_context(cli.project.clone(), cli.database.clone())?;
@@ -743,6 +761,9 @@ fn run(
         }
         crate::cli::Command::SelfUpdate(_) => {
             unreachable!("self-update is handled before DB resolution")
+        }
+        crate::cli::Command::SelfUninstall(_) => {
+            unreachable!("self-uninstall is handled before DB resolution")
         }
         crate::cli::Command::Web(web_command) => crate::web::run(&database_path, web_command.port),
     }

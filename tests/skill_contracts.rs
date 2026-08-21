@@ -41,6 +41,7 @@ fn codex_and_claude_skills_use_only_declared_contracts() {
         "bettr decision request",
         "bettr decision resolve",
         "bettr event list --after",
+        "bettr self-uninstall",
     ] {
         assert!(
             combined.contains(command),

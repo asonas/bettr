@@ -108,6 +108,7 @@ impl AuditInvocation {
             ("restore", _) => "restore",
             ("context", _) => "context",
             ("self-update", _) => "self_update",
+            ("self-uninstall", _) => "self_uninstall",
             ("web", _) => "web",
             _ => return None,
         };
@@ -134,6 +135,7 @@ pub enum Command {
     Restore(RestoreCommand),
     Context(ContextCommand),
     SelfUpdate(SelfUpdateCommand),
+    SelfUninstall(SelfUninstallCommand),
     Web(WebCommand),
 }
 
@@ -143,6 +145,9 @@ pub struct SelfUpdateCommand {
     #[arg(long, value_enum)]
     pub source: Option<crate::app::UpdateSource>,
 }
+
+#[derive(clap::Args, Debug)]
+pub struct SelfUninstallCommand {}
 
 #[derive(clap::Args, Debug)]
 pub struct InitCommand {}

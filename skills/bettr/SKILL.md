@@ -207,3 +207,14 @@ After this repository is available on its default branch, install this skill wit
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo asonas/bettr --path skills/bettr --ref main
 ```
+
+## Uninstallation
+
+Remove the installed Codex and Claude Code skills while keeping the bettr CLI:
+
+```sh
+bettr self-uninstall
+```
+
+The command removes only managed skill directories. It leaves symlinks and
+directories without the expected skill manifest untouched.

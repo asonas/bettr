@@ -37,6 +37,7 @@ pub enum AppError {
         current_version: u32,
     },
     SelfUpdateFailed(serde_json::Value),
+    SelfUninstallFailed(serde_json::Value),
     InvalidBackup(String),
     BackupOutputExists,
     BackupConfirmationRequired,
@@ -63,7 +64,7 @@ impl AppError {
             Self::DatabaseAlreadyInitialized => ExitCode::InvalidInput,
             Self::DatabaseNotInitialized => ExitCode::NotFound,
             Self::UnsupportedDatabaseSchemaVersion { .. } => ExitCode::InvalidInput,
-            Self::SelfUpdateFailed(_) => ExitCode::Internal,
+            Self::SelfUpdateFailed(_) | Self::SelfUninstallFailed(_) => ExitCode::Internal,
             Self::InvalidBackup(_) | Self::BackupConfirmationRequired => ExitCode::InvalidInput,
             Self::BackupOutputExists | Self::BackupDestinationInUse => ExitCode::Conflict,
             Self::BackupOperation { .. } => ExitCode::Internal,
@@ -87,6 +88,7 @@ impl AppError {
             Self::DatabaseNotInitialized => "database_not_initialized",
             Self::UnsupportedDatabaseSchemaVersion { .. } => "unsupported_database_schema_version",
             Self::SelfUpdateFailed(_) => "self_update_failed",
+            Self::SelfUninstallFailed(_) => "self_uninstall_failed",
             Self::InvalidBackup(_) => "invalid_backup",
             Self::BackupOutputExists => "backup_output_exists",
             Self::BackupConfirmationRequired => "confirmation_required",
@@ -129,6 +131,7 @@ impl std::fmt::Display for AppError {
                 "database schema version {found_version} is unsupported; current version is {current_version}"
             ),
             Self::SelfUpdateFailed(_) => formatter.write_str("self-update failed"),
+            Self::SelfUninstallFailed(_) => formatter.write_str("self-uninstall failed"),
             Self::InvalidBackup(message) => formatter.write_str(message),
             Self::BackupOutputExists => formatter.write_str("backup output already exists"),
             Self::BackupConfirmationRequired => {

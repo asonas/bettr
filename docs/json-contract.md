@@ -152,6 +152,15 @@ Failed commands return a nonzero exit code and write:
 
 `self-update --json` returns `cli`, `codex`, and `claude` component results. Each component includes its `source`, `version`, `revision`, `result`, and installed `path`. `result` is `updated`, `installed`, or `failed`. A failed component also includes `error`; a retained skill backup is reported as `backup`. If any component fails, the command exits 10 and puts the same report in `error.details` with `error.code: "self_update_failed"`.
 
+## Self-uninstall
+
+`self-uninstall --json` returns `codex` and `claude` component results. Each
+component includes its `path` and `result`, where `result` is `removed`,
+`not_installed`, or `failed`. A failed component also includes `error`. The
+command removes only managed skill directories and never removes the bettr
+CLI. If any component fails, the command exits 10 and puts the same report in
+`error.details` with `error.code: "self_uninstall_failed"`.
+
 ## Timestamps
 
 All JSON timestamps are RFC 3339 strings in UTC. bettr serializes UTC with the `Z` suffix, for example `2026-08-15T09:30:00Z`. Consumers must parse the timestamp as an instant rather than relying on a fixed number of fractional-second digits.

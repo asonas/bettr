@@ -52,6 +52,9 @@ pub fn write_error(mode: OutputMode, error: &crate::error::AppError) {
                 crate::error::AppError::SelfUpdateFailed(report) => {
                     error_value["error"]["details"] = report.clone();
                 }
+                crate::error::AppError::SelfUninstallFailed(report) => {
+                    error_value["error"]["details"] = report.clone();
+                }
                 crate::error::AppError::AuditIntegrity { line, sequence, .. } => {
                     error_value["error"]["details"] = serde_json::json!({
                         "line": line,
@@ -105,6 +108,22 @@ fn write_self_update_component(name: &str, component: &crate::self_update::Compo
     if let Some(backup) = &component.backup {
         println!("  backup: {}", escape_terminal_controls(backup));
     }
+    if let Some(error) = &component.error {
+        println!("  error: {}", escape_terminal_controls(error));
+    }
+}
+
+pub fn write_self_uninstall_human(report: &crate::self_update::SelfUninstallReport) {
+    write_self_uninstall_component("codex", &report.codex);
+    write_self_uninstall_component("claude", &report.claude);
+}
+
+fn write_self_uninstall_component(name: &str, component: &crate::self_update::ComponentUninstall) {
+    println!(
+        "{name}: {} path={}",
+        component.result.as_str(),
+        escape_terminal_controls(&component.path)
+    );
     if let Some(error) = &component.error {
         println!("  error: {}", escape_terminal_controls(error));
     }

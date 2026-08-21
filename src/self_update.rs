@@ -20,6 +20,24 @@ impl UpdateResult {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UninstallResult {
+    Removed,
+    NotInstalled,
+    Failed,
+}
+
+impl UninstallResult {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Removed => "removed",
+            Self::NotInstalled => "not_installed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct ComponentUpdate {
     pub source: crate::app::UpdateSource,
@@ -40,6 +58,28 @@ pub struct SelfUpdateReport {
     pub cli: ComponentUpdate,
     pub codex: ComponentUpdate,
     pub claude: ComponentUpdate,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ComponentUninstall {
+    pub result: UninstallResult,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SelfUninstallReport {
+    pub codex: ComponentUninstall,
+    pub claude: ComponentUninstall,
+}
+
+impl SelfUninstallReport {
+    pub fn succeeded(&self) -> bool {
+        [&self.codex.result, &self.claude.result]
+            .into_iter()
+            .all(|result| *result != UninstallResult::Failed)
+    }
 }
 
 impl SelfUpdateReport {
@@ -110,6 +150,13 @@ pub fn run(source: crate::app::UpdateSource) -> Result<SelfUpdateReport, crate::
         cli,
         codex,
         claude,
+    })
+}
+
+pub fn uninstall() -> Result<SelfUninstallReport, crate::error::AppError> {
+    Ok(SelfUninstallReport {
+        codex: uninstall_skill("bettr", codex_skill_destination()),
+        claude: uninstall_skill("bettr-claude", claude_skill_destination()),
     })
 }
 
@@ -275,6 +322,35 @@ fn update_skill(
     }
 }
 
+fn uninstall_skill(
+    source_name: &str,
+    destination: Result<std::path::PathBuf, crate::error::AppError>,
+) -> ComponentUninstall {
+    let destination = match destination {
+        Ok(destination) => destination,
+        Err(error) => {
+            return ComponentUninstall {
+                result: UninstallResult::Failed,
+                path: source_name.to_owned(),
+                error: Some(error.to_string()),
+            };
+        }
+    };
+    let path = destination.display().to_string();
+    match remove_installed_skill(&destination, source_name) {
+        Ok(result) => ComponentUninstall {
+            result,
+            path,
+            error: None,
+        },
+        Err(error) => ComponentUninstall {
+            result: UninstallResult::Failed,
+            path,
+            error: Some(error.to_string()),
+        },
+    }
+}
+
 fn component(
     bundle: &Bundle,
     path: String,
@@ -375,6 +451,82 @@ fn install_skill(
     } else {
         Ok(UpdateResult::Installed)
     }
+}
+
+fn remove_installed_skill(
+    destination: &std::path::Path,
+    expected_name: &str,
+) -> Result<UninstallResult, crate::error::AppError> {
+    let metadata = match std::fs::symlink_metadata(destination) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(UninstallResult::NotInstalled);
+        }
+        Err(error) => {
+            return Err(crate::error::AppError::Internal(format!(
+                "could not inspect skill destination {}: {error}",
+                destination.display()
+            )));
+        }
+    };
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Err(crate::error::AppError::Conflict(format!(
+            "refusing to remove symlink skill destination: {}",
+            destination.display()
+        )));
+    }
+    if !file_type.is_dir() {
+        return Err(crate::error::AppError::Conflict(format!(
+            "refusing to remove non-directory skill destination: {}",
+            destination.display()
+        )));
+    }
+
+    let manifest = destination.join("SKILL.md");
+    let contents = std::fs::read_to_string(&manifest).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            crate::error::AppError::Conflict(format!(
+                "refusing to remove unmanaged skill directory: {}",
+                destination.display()
+            ))
+        } else {
+            crate::error::AppError::Internal(format!(
+                "could not read skill manifest {}: {error}",
+                manifest.display()
+            ))
+        }
+    })?;
+    if !has_skill_name(&contents, expected_name) {
+        return Err(crate::error::AppError::Conflict(format!(
+            "refusing to remove unmanaged skill directory: {}",
+            destination.display()
+        )));
+    }
+
+    remove_path(destination).map_err(|error| {
+        crate::error::AppError::Internal(format!(
+            "could not remove skill directory {}: {error}",
+            destination.display()
+        ))
+    })?;
+    Ok(UninstallResult::Removed)
+}
+
+fn has_skill_name(contents: &str, expected_name: &str) -> bool {
+    let mut lines = contents.lines();
+    if lines.next() != Some("---") {
+        return false;
+    }
+    for line in lines {
+        if line == "---" {
+            break;
+        }
+        if line.trim() == format!("name: {expected_name}") {
+            return true;
+        }
+    }
+    false
 }
 
 fn copy_tree(
@@ -842,5 +994,66 @@ mod tests {
             std::fs::read_to_string(backup.join("SKILL.md")).unwrap(),
             "recovery"
         );
+    }
+
+    #[test]
+    fn uninstalls_a_managed_skill() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("codex/skills/bettr");
+        std::fs::create_dir_all(&destination).unwrap();
+        std::fs::write(
+            destination.join("SKILL.md"),
+            "---\nname: bettr\n---\n# Bettr\n",
+        )
+        .unwrap();
+        std::fs::write(destination.join("README.md"), "managed").unwrap();
+
+        let result = super::remove_installed_skill(&destination, "bettr").unwrap();
+
+        assert_eq!(result, super::UninstallResult::Removed);
+        assert!(!destination.exists());
+        assert!(destination.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn reports_a_missing_skill_without_changing_its_parent() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("codex/skills/bettr");
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+
+        let result = super::remove_installed_skill(&destination, "bettr").unwrap();
+
+        assert_eq!(result, super::UninstallResult::NotInstalled);
+        assert!(destination.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn refuses_to_remove_an_unmanaged_skill_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("codex/skills/bettr");
+        std::fs::create_dir_all(&destination).unwrap();
+        std::fs::write(destination.join("SKILL.md"), "user skill").unwrap();
+
+        let error = super::remove_installed_skill(&destination, "bettr").unwrap_err();
+
+        assert!(error.to_string().contains("unmanaged skill directory"));
+        assert!(destination.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_to_remove_a_symlink_skill_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target");
+        let destination = directory.path().join("codex/skills/bettr");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&target, &destination).unwrap();
+
+        let error = super::remove_installed_skill(&destination, "bettr").unwrap_err();
+
+        assert!(error.to_string().contains("refusing to remove symlink"));
+        assert!(destination.exists());
+        assert!(target.exists());
     }
 }

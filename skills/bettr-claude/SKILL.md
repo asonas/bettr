@@ -114,3 +114,10 @@ Consume events in sequence order and advance only to `next_cursor`. `event_curso
 ## Claude Code installation
 
 Load this directory as the Claude Code adapter for the project. Keep its command semantics synchronized with `skills/bettr/SKILL.md`; runtime-specific installation details belong in [README.md](README.md), while this file contains the operational contract.
+
+To remove the installed Codex and Claude Code skills while keeping the bettr
+CLI, run:
+
+```sh
+bettr self-uninstall
+```

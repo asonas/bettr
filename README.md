@@ -122,6 +122,16 @@ Use the current `main` branch instead, or set `update_source = "main"` in the be
 bettr self-update --source main
 ```
 
+Remove the installed Codex and Claude Code skills while keeping the CLI:
+
+```sh
+bettr self-uninstall
+```
+
+The command removes only managed skill directories. Missing skills are reported
+as `not_installed`; symlinks and directories without the expected skill
+manifest are left untouched.
+
 The JSON response contract is documented in [`docs/json-contract.md`](docs/json-contract.md). Agent-specific workflows are documented in [`skills/bettr`](skills/bettr) and [`skills/bettr-claude`](skills/bettr-claude).
 
 ## Repository project context

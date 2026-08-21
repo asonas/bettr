@@ -593,7 +593,8 @@ fn status_code(error: &crate::error::AppError) -> u16 {
         | crate::error::AppError::AuditIntegrity { .. }
         | crate::error::AppError::AuditOperation { .. }
         | crate::error::AppError::BackupOperation { .. }
-        | crate::error::AppError::SelfUpdateFailed(_) => 500,
+        | crate::error::AppError::SelfUpdateFailed(_)
+        | crate::error::AppError::SelfUninstallFailed(_) => 500,
     }
 }
 

@@ -20,6 +20,7 @@ fn help_names_the_product_and_core_commands() {
         .stdout(predicate::str::contains("redact"))
         .stdout(predicate::str::contains("status"))
         .stdout(predicate::str::contains("self-update"))
+        .stdout(predicate::str::contains("self-uninstall"))
         .stdout(predicate::str::contains("backup"))
         .stdout(predicate::str::contains("restore"))
         .stdout(predicate::str::contains("web"));
@@ -39,6 +40,13 @@ fn help_names_the_product_and_core_commands() {
         .stdout(predicate::str::contains("--source"))
         .stdout(predicate::str::contains("release"))
         .stdout(predicate::str::contains("main"));
+
+    Command::cargo_bin("bettr")
+        .unwrap()
+        .args(["self-uninstall", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("self-uninstall"));
 
     Command::cargo_bin("bettr")
         .unwrap()
